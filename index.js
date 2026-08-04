@@ -7,15 +7,17 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
+// Root URL Keep-Alive ke liye
 app.get('/', (req, res) => {
-    res.send('E-Visitor Automation Microservice is Live!');
+    res.send('E-Visitor Automation Scraper is Active & Fast!');
 });
 
-app.post('/login-evisitor', async (req, res) => {
-    const { url, sso_id, password } = req.body;
+// Main Automation & Scraper Endpoint
+app.all('/scrape', async (req, res) => {
+    const targetUrl = req.query.url || req.body.url;
 
-    if (!url || !sso_id || !password) {
-        return res.status(400).json({ error: 'url, sso_id aur password zaroori hain.' });
+    if (!targetUrl) {
+        return res.status(400).json({ error: 'URL parameter missing hai' });
     }
 
     let browser = null;
@@ -27,7 +29,10 @@ app.post('/login-evisitor', async (req, res) => {
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
                 '--disable-gpu',
+                '--no-first-run',
+                '--no-zygote'
             ],
             defaultViewport: { width: 1280, height: 800 },
             executablePath: await chromium.executablePath(),
@@ -36,90 +41,53 @@ app.post('/login-evisitor', async (req, res) => {
 
         const page = await browser.newPage();
 
-        // 1. Target URL open karein
-        await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
-
-        // 2. Main Login button par click karein (modal open karne ke liye)
-        const topLoginBtn = await page.$('button.login-btn');
-        if (topLoginBtn) {
-            await topLoginBtn.click();
-            // Modal render hone ka wait karein
-            await page.waitForSelector('input[placeholder="Enter SSO ID"]', { timeout: 10000 });
-        }
-
-        // 3. DOM se Captcha Text extract karein
-        const captchaCode = await page.evaluate(() => {
-            // Priority 1: Direct Class selector
-            const el = document.querySelector('.css-uayl0r');
-            if (el && el.innerText.trim()) {
-                return el.innerText.trim();
+        // SPEED OPTIMIZATION: Images, Fonts, aur Stylesheets Block karein
+        await page.setRequestInterception(true);
+        page.on('request', (req) => {
+            const resourceType = req.resourceType();
+            if (['image', 'stylesheet', 'font', 'media'].includes(resourceType)) {
+                req.abort();
+            } else {
+                req.continue();
             }
-
-            // Priority 2: Fallback - Captcha input field ke paas wala Text box dhoondhein
-            const captchaInput = document.querySelector('input[placeholder="Enter Captcha"]');
-            if (captchaInput) {
-                const parentBox = captchaInput.closest('.css-1tx38fa');
-                if (parentBox) {
-                    const textDiv = parentBox.querySelector('.MuiBox-root');
-                    if (textDiv) return textDiv.innerText.trim();
-                }
-            }
-
-            return null;
         });
 
-        if (!captchaCode) {
-            throw new Error('CAPTCHA code DOM me nahi mila.');
-        }
-
-        // 4. Input Fields me Data Fill Karein
-        
-        // SSO ID Field
-        await page.click('input[placeholder="Enter SSO ID"]', { clickCount: 3 });
-        await page.type('input[placeholder="Enter SSO ID"]', sso_id, { delay: 50 });
-
-        // Password Field
-        await page.click('input[placeholder="Enter Password"]', { clickCount: 3 });
-        await page.type('input[placeholder="Enter Password"]', password, { delay: 50 });
-
-        // Captcha Field
-        await page.click('input[placeholder="Enter Captcha"]', { clickCount: 3 });
-        await page.type('input[placeholder="Enter Captcha"]', captchaCode, { delay: 50 });
-
-        // 5. Submit Button par Click Karein
-        // Card ke andar wala Submit Button
-        const submitButton = await page.evaluateHandle(() => {
-            const buttons = Array.from(document.querySelectorAll('button'));
-            return buttons.find(b => b.textContent.trim() === 'Submit');
+        // Page Visit
+        await page.goto(targetUrl, { 
+            waitUntil: 'domcontentloaded', 
+            timeout: 30000 
         });
 
-        if (submitButton) {
-            await Promise.all([
-                submitButton.click(),
-                page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => null)
-            ]);
+        // AUTOMATION STEPS (Agar Form Fill / Click karna ho):
+        // Example: Pehle element ke aane ka wait karein
+        try {
+            await page.waitForSelector('body', { timeout: 5000 });
+            
+            // Agar kisi specific input/button ko automations se handle karna ho:
+            /*
+            if (req.body.search_term) {
+                await page.type('#search_input', req.body.search_term);
+                await page.click('#submit_button');
+                await page.waitForNetworkIdle();
+            }
+            */
+        } catch (e) {
+            console.log('Element wait timeout, proceeding anyway...');
         }
 
-        // 6. Login hone ke baad ka Session / Cookies / HTML Content Extract Karein
-        const cookies = await page.cookies();
-        const postLoginHtml = await page.content();
+        // Final HTML Content Extract karein
+        const htmlContent = await page.content();
 
         await browser.close();
 
-        return res.json({
-            status: 'success',
-            captcha_used: captchaCode,
-            cookies: cookies,
-            html: postLoginHtml
-        });
+        return res.send(htmlContent);
 
     } catch (error) {
         if (browser) await browser.close();
-        return res.status(500).json({
-            status: 'error',
-            message: error.message
-        });
+        return res.status(500).json({ error: 'Automation Error: ' + error.message });
     }
 });
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+    console.log(`Server active on port ${PORT}`);
+});
