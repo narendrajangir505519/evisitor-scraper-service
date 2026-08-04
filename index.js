@@ -92,7 +92,7 @@ app.post('/login-evisitor', async (req, res) => {
     const { url, sso_id, password } = req.body;
 
     if (!url || !sso_id || !password) {
-        return res.status(400).json({ error: 'url, sso_id aur password missing hai.' });
+        return res.status(400).json({ error: 'url, sso_id aur password zaroori hain.' });
     }
 
     let browser = null;
@@ -113,21 +113,21 @@ app.post('/login-evisitor', async (req, res) => {
 
         const page = await browser.newPage();
 
-        // 1. E-visitor Page Open Karein
+        // 1. E-Visitor Page Open Karein
         await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
 
-        // 2. Main Login button par click karein
+        // 2. Login button click karein (modal open hone ke liye)
         const topLoginBtn = await page.$('button.login-btn');
         if (topLoginBtn) {
             await topLoginBtn.click();
             await page.waitForSelector('input[placeholder="Enter SSO ID"]', { timeout: 10000 });
         }
 
-        // 3. CAPTCHA Text Extract Karein
+        // 3. CAPTCHA Extract Karein
         const captchaCode = await page.evaluate(() => {
             const el = document.querySelector('.css-uayl0r');
             if (el && el.innerText.trim()) return el.innerText.trim();
-            
+
             const captchaInput = document.querySelector('input[placeholder="Enter Captcha"]');
             if (captchaInput) {
                 const parentBox = captchaInput.closest('.css-1tx38fa');
@@ -140,7 +140,7 @@ app.post('/login-evisitor', async (req, res) => {
         });
 
         if (!captchaCode) {
-            throw new Error('CAPTCHA code DOM me nahi mil paaya.');
+            throw new Error('CAPTCHA code DOM me nahi mila.');
         }
 
         // 4. Form Fill Karein
@@ -163,26 +163,62 @@ app.post('/login-evisitor', async (req, res) => {
             await submitButton.click();
         }
 
-        // 6. REACT DYNAMIC WAIT: Login Form hatne aur Next Page API Data Load hone ka wait karein
+        // 6. TOAST MESSAGE CAPTURE & CHECK
+        let toastData = { success: false, message: '' };
+
         try {
-            // Option A: Login form ke disappear hone ka wait karein
-            await page.waitForFunction(() => !document.querySelector('.login-card'), { timeout: 15000 });
+            // Toast element aane ka wait karein (Max 8 seconds)
+            await page.waitForSelector('.Toastify__toast', { timeout: 8000 });
+
+            toastData = await page.evaluate(() => {
+                const toastEl = document.querySelector('.Toastify__toast');
+                if (!toastEl) return { success: false, message: 'No Toast found' };
+
+                const text = toastEl.innerText ? toastEl.innerText.trim() : '';
+                
+                // Success check (Class check ya Text match)
+                const isSuccessClass = toastEl.classList.contains('Toastify__toast--success');
+                const isSuccessText = text.toLowerCase().includes('success') || text.toLowerCase().includes('successful');
+
+                return {
+                    success: isSuccessClass || isSuccessText,
+                    message: text
+                };
+            });
         } catch (e) {
-            console.log('Form did not disappear immediately, fallback to delay wait...');
+            console.log('Toast notification delay or not triggered');
         }
 
-        // React internal API calls & rendering settle hone ke liye 4 seconds extra wait
+        // AGAR TOAST ME ERROR AAYA HAI (Jaise: Invalid Captcha / Incorrect Password)
+        if (toastData.message && !toastData.success) {
+            await browser.close();
+            return res.status(400).json({
+                status: 'login_failed',
+                toast_message: toastData.message,
+                captcha_used: captchaCode,
+                message: 'Login Failed via Toast: ' + toastData.message
+            });
+        }
+
+        // 7. LOGIN SUCCESS: Next Page Component & API settle hone ka wait karein
+        try {
+            await page.waitForFunction(() => !document.querySelector('.login-card'), { timeout: 15000 });
+        } catch (e) {
+            console.log('Login card DOM transition timeout...');
+        }
+
+        // 4 seconds extra delay for React component rendering
         await new Promise(resolve => setTimeout(resolve, 4000));
 
-        // 7. Next Page (Dashboard / Post-login screen) ka HTML aur Cookies nikalen
+        // Next Page ka HTML aur Session Cookies Extract Karein
         const nextPageHtml = await page.content();
         const cookies = await page.cookies();
 
         await browser.close();
 
-        // Direct Next Page HTML Response
         return res.json({
             status: 'success',
+            toast_message: toastData.message || 'Login Successful',
             captcha_used: captchaCode,
             cookies: cookies,
             next_page_html: nextPageHtml
