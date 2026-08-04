@@ -91,9 +91,9 @@ app.all('/scrape', async (req, res) => {
 app.post('/login-evisitor', async (req, res) => {
     const { url, sso_id, password } = req.body;
 
-    if (!url || !sso_id || !password) {
-        return res.status(400).json({ error: 'url, sso_id aur password zaroori hain.' });
-    }
+    // Direct Protected Visitors URL
+    const visitorsUrl = 'https://evisitor.rajasthan.gov.in/evisitor/user/visitors';
+    const loginBaseUrl = url || 'https://evisitor.rajasthan.gov.in/evisitor';
 
     let browser = null;
 
@@ -113,17 +113,55 @@ app.post('/login-evisitor', async (req, res) => {
 
         const page = await browser.newPage();
 
-        // 1. E-Visitor Page Open Karein
-        await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
+        // -------------------------------------------------------------
+        // STEP 1: Pehle Directly Visitors URL Hit Karke Session Check Karein
+        // -------------------------------------------------------------
+        console.log('Checking existing session via Visitors URL...');
+        await page.goto(visitorsUrl, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => null);
 
-        // 2. Login button click karein (modal open hone ke liye)
+        const currentUrl = page.url();
+
+        // Agar Redirect nahi hua aur URL par '/user/visitors' maujood hai = LOGIN ALREADY ACTIVE
+        if (currentUrl.includes('/user/visitors')) {
+            console.log('Session active! Already logged in.');
+            const pageHtml = await page.content();
+            const cookies = await page.cookies();
+            await browser.close();
+
+            return res.json({
+                status: 'already_logged_in',
+                toast_message: 'Session Already Active',
+                cookies: cookies,
+                next_page_html: pageHtml
+            });
+        }
+
+        // -------------------------------------------------------------
+        // STEP 2: Agar Redirect Ho Gaya -> Login Process Start Karein
+        // -------------------------------------------------------------
+        console.log('Not logged in. Redirected to login page. Starting login automation...');
+        
+        if (!currentUrl.includes('/evisitor')) {
+            await page.goto(loginBaseUrl, { waitUntil: 'networkidle2', timeout: 45000 });
+        }
+
+        // Top Login Button Click
         const topLoginBtn = await page.$('button.login-btn');
         if (topLoginBtn) {
             await topLoginBtn.click();
-            await page.waitForSelector('input[placeholder="Enter SSO ID"]', { timeout: 10000 });
         }
 
-        // 3. CAPTCHA Extract Karein
+        // Login Modal aur SSO ID Field aane ka wait karein
+        await page.waitForSelector('input[placeholder="Enter SSO ID"]', { timeout: 15000 });
+
+        // CAPTCHA Element ka DOM me aane ka wait karein
+        try {
+            await page.waitForSelector('.css-uayl0r', { timeout: 8000 });
+        } catch (e) {
+            console.log('Captcha selector wait timeout, evaluating DOM...');
+        }
+
+        // CAPTCHA Extract Karein
         const captchaCode = await page.evaluate(() => {
             const el = document.querySelector('.css-uayl0r');
             if (el && el.innerText.trim()) return el.innerText.trim();
@@ -140,10 +178,10 @@ app.post('/login-evisitor', async (req, res) => {
         });
 
         if (!captchaCode) {
-            throw new Error('CAPTCHA code DOM me nahi mila.');
+            throw new Error('CAPTCHA code DOM me load nahi ho paya. Refresh karke try karein.');
         }
 
-        // 4. Form Fill Karein
+        // Form Inputs Fill Karein
         await page.click('input[placeholder="Enter SSO ID"]', { clickCount: 3 });
         await page.type('input[placeholder="Enter SSO ID"]', sso_id, { delay: 30 });
 
@@ -153,7 +191,7 @@ app.post('/login-evisitor', async (req, res) => {
         await page.click('input[placeholder="Enter Captcha"]', { clickCount: 3 });
         await page.type('input[placeholder="Enter Captcha"]', captchaCode, { delay: 30 });
 
-        // 5. Submit Button Click Karein
+        // Submit Click
         const submitButton = await page.evaluateHandle(() => {
             const buttons = Array.from(document.querySelectorAll('button'));
             return buttons.find(b => b.textContent.trim() === 'Submit');
@@ -163,54 +201,36 @@ app.post('/login-evisitor', async (req, res) => {
             await submitButton.click();
         }
 
-        // 6. TOAST MESSAGE CAPTURE & CHECK
+        // Toast Status Capture
         let toastData = { success: false, message: '' };
-
         try {
-            // Toast element aane ka wait karein (Max 8 seconds)
             await page.waitForSelector('.Toastify__toast', { timeout: 8000 });
-
             toastData = await page.evaluate(() => {
                 const toastEl = document.querySelector('.Toastify__toast');
-                if (!toastEl) return { success: false, message: 'No Toast found' };
-
+                if (!toastEl) return { success: false, message: '' };
                 const text = toastEl.innerText ? toastEl.innerText.trim() : '';
-                
-                // Success check (Class check ya Text match)
                 const isSuccessClass = toastEl.classList.contains('Toastify__toast--success');
                 const isSuccessText = text.toLowerCase().includes('success') || text.toLowerCase().includes('successful');
-
-                return {
-                    success: isSuccessClass || isSuccessText,
-                    message: text
-                };
+                return { success: isSuccessClass || isSuccessText, message: text };
             });
         } catch (e) {
-            console.log('Toast notification delay or not triggered');
+            console.log('Toast wait complete.');
         }
 
-        // AGAR TOAST ME ERROR AAYA HAI (Jaise: Invalid Captcha / Incorrect Password)
+        // Invalid Credentials / Captcha Error
         if (toastData.message && !toastData.success) {
             await browser.close();
             return res.status(400).json({
                 status: 'login_failed',
                 toast_message: toastData.message,
-                captcha_used: captchaCode,
-                message: 'Login Failed via Toast: ' + toastData.message
+                captcha_used: captchaCode
             });
         }
 
-        // 7. LOGIN SUCCESS: Next Page Component & API settle hone ka wait karein
-        try {
-            await page.waitForFunction(() => !document.querySelector('.login-card'), { timeout: 15000 });
-        } catch (e) {
-            console.log('Login card DOM transition timeout...');
-        }
-
-        // 4 seconds extra delay for React component rendering
+        // Login ke baad Visitors Page Navigate hone ka wait karein
+        await page.waitForFunction(() => !document.querySelector('.login-card'), { timeout: 15000 }).catch(() => null);
         await new Promise(resolve => setTimeout(resolve, 4000));
 
-        // Next Page ka HTML aur Session Cookies Extract Karein
         const nextPageHtml = await page.content();
         const cookies = await page.cookies();
 
