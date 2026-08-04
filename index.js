@@ -92,7 +92,7 @@ app.post('/login-evisitor', async (req, res) => {
     const { url, sso_id, password } = req.body;
 
     if (!url || !sso_id || !password) {
-        return res.status(400).json({ error: 'url, sso_id aur password zaroori hain.' });
+        return res.status(400).json({ error: 'url, sso_id aur password missing hai.' });
     }
 
     let browser = null;
@@ -113,26 +113,21 @@ app.post('/login-evisitor', async (req, res) => {
 
         const page = await browser.newPage();
 
-        // 1. Target URL open karein
+        // 1. E-visitor Page Open Karein
         await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
 
-        // 2. Main Login button par click karein (modal open karne ke liye)
+        // 2. Main Login button par click karein
         const topLoginBtn = await page.$('button.login-btn');
         if (topLoginBtn) {
             await topLoginBtn.click();
-            // Modal render hone ka wait karein
             await page.waitForSelector('input[placeholder="Enter SSO ID"]', { timeout: 10000 });
         }
 
-        // 3. DOM se Captcha Text extract karein
+        // 3. CAPTCHA Text Extract Karein
         const captchaCode = await page.evaluate(() => {
-            // Priority 1: Direct Class selector
             const el = document.querySelector('.css-uayl0r');
-            if (el && el.innerText.trim()) {
-                return el.innerText.trim();
-            }
-
-            // Priority 2: Fallback - Captcha input field ke paas wala Text box dhoondhein
+            if (el && el.innerText.trim()) return el.innerText.trim();
+            
             const captchaInput = document.querySelector('input[placeholder="Enter Captcha"]');
             if (captchaInput) {
                 const parentBox = captchaInput.closest('.css-1tx38fa');
@@ -141,53 +136,56 @@ app.post('/login-evisitor', async (req, res) => {
                     if (textDiv) return textDiv.innerText.trim();
                 }
             }
-
             return null;
         });
 
         if (!captchaCode) {
-            throw new Error('CAPTCHA code DOM me nahi mila.');
+            throw new Error('CAPTCHA code DOM me nahi mil paaya.');
         }
 
-        // 4. Input Fields me Data Fill Karein
-        
-        // SSO ID Field
+        // 4. Form Fill Karein
         await page.click('input[placeholder="Enter SSO ID"]', { clickCount: 3 });
-        await page.type('input[placeholder="Enter SSO ID"]', sso_id, { delay: 50 });
+        await page.type('input[placeholder="Enter SSO ID"]', sso_id, { delay: 30 });
 
-        // Password Field
         await page.click('input[placeholder="Enter Password"]', { clickCount: 3 });
-        await page.type('input[placeholder="Enter Password"]', password, { delay: 50 });
+        await page.type('input[placeholder="Enter Password"]', password, { delay: 30 });
 
-        // Captcha Field
         await page.click('input[placeholder="Enter Captcha"]', { clickCount: 3 });
-        await page.type('input[placeholder="Enter Captcha"]', captchaCode, { delay: 50 });
+        await page.type('input[placeholder="Enter Captcha"]', captchaCode, { delay: 30 });
 
-        // 5. Submit Button par Click Karein
-        // Card ke andar wala Submit Button
+        // 5. Submit Button Click Karein
         const submitButton = await page.evaluateHandle(() => {
             const buttons = Array.from(document.querySelectorAll('button'));
             return buttons.find(b => b.textContent.trim() === 'Submit');
         });
 
         if (submitButton) {
-            await Promise.all([
-                submitButton.click(),
-                page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => null)
-            ]);
+            await submitButton.click();
         }
 
-        // 6. Login hone ke baad ka Session / Cookies / HTML Content Extract Karein
+        // 6. REACT DYNAMIC WAIT: Login Form hatne aur Next Page API Data Load hone ka wait karein
+        try {
+            // Option A: Login form ke disappear hone ka wait karein
+            await page.waitForFunction(() => !document.querySelector('.login-card'), { timeout: 15000 });
+        } catch (e) {
+            console.log('Form did not disappear immediately, fallback to delay wait...');
+        }
+
+        // React internal API calls & rendering settle hone ke liye 4 seconds extra wait
+        await new Promise(resolve => setTimeout(resolve, 4000));
+
+        // 7. Next Page (Dashboard / Post-login screen) ka HTML aur Cookies nikalen
+        const nextPageHtml = await page.content();
         const cookies = await page.cookies();
-        const postLoginHtml = await page.content();
 
         await browser.close();
 
+        // Direct Next Page HTML Response
         return res.json({
             status: 'success',
             captcha_used: captchaCode,
             cookies: cookies,
-            html: postLoginHtml
+            next_page_html: nextPageHtml
         });
 
     } catch (error) {
