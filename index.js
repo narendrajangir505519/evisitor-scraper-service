@@ -253,6 +253,172 @@ app.post('/login-evisitor', async (req, res) => {
     }
 });
 
+
+// CREATE VISITOR AUTOMATION ENDPOINT
+app.post('/create-visitor', async (req, res) => {
+    const { cookies, visitor_data } = req.body;
+
+    // Validation: Cookies aur Data zaruri hai
+    if (!cookies || !visitor_data) {
+        return res.status(400).json({ 
+            status: 'error', 
+            message: 'Cookies aur visitor_data required hain.' 
+        });
+    }
+
+    const visitorsUrl = 'https://evisitor.rajasthan.gov.in/evisitor/user/visitors';
+    let browser = null;
+
+    try {
+        browser = await puppeteer.launch({
+            args: [
+                ...chromium.args,
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+            ],
+            defaultViewport: { width: 1280, height: 800 },
+            executablePath: await chromium.executablePath(),
+            headless: chromium.headless, // Production me true rakhein
+        });
+
+        const page = await browser.newPage();
+
+        // 1. Session restore karne ke liye Cookies set karein
+        await page.setCookie(...cookies);
+
+        // 2. Visitors page par jayein
+        console.log('Navigating to Visitors Page...');
+        await page.goto(visitorsUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+
+        const currentUrl = page.url();
+        if (!currentUrl.includes('/user/visitors')) {
+            throw new Error('Session expire ho gaya hai ya invalid cookies hain. Kripya dobara login karein.');
+        }
+
+        // 3. 'CREATE VISITOR' Modal Open Karna
+        console.log('Opening Create Visitor Modal...');
+        const createBtn = await page.evaluateHandle(() => {
+            const buttons = Array.from(document.querySelectorAll('button'));
+            // Button ka text match karein (Apni UI ke hisab se text change karein agar zarurat ho)
+            return buttons.find(b => b.textContent.trim().toUpperCase().includes('CREATE VISITOR') || b.textContent.trim().includes('Check-In'));
+        });
+        
+        if (createBtn) {
+            await createBtn.click();
+            await page.waitForTimeout(2000); // Modal animation ka wait karein
+        }
+
+        // 4. Form Fill Karna (IDs ko apne actual E-visitor portal ke HTML se match karein)
+        console.log('Filling form data...');
+        
+        // Helper function text type karne ke liye
+        const typeData = async (selector, text) => {
+            if (text) {
+                const el = await page.$(selector).catch(() => null);
+                if (el) {
+                    await page.click(selector, { clickCount: 3 }); // clear existing
+                    await page.type(selector, text, { delay: 10 });
+                }
+            }
+        };
+
+        // Text Fields
+        await typeData('input[name="room_number"], #room_number', visitor_data.room_number);
+        await typeData('input[name="coming_from"], #coming_from', visitor_data.coming_from);
+        await typeData('input[name="going_to"], #going_to', visitor_data.going_to);
+        await typeData('input[name="full_name"], #full_name', visitor_data.full_name);
+        await typeData('input[name="mobile_number"], #mobile_number', visitor_data.mobile_number);
+        await typeData('input[name="document_number"], #document_number', visitor_data.document_number);
+        
+        if (visitor_data.address) {
+            await typeData('textarea[name="address"], #address, input[name="address"]', visitor_data.address);
+        }
+
+        // Dropdowns (Select tags)
+        const selectData = async (selector, value) => {
+            if (value) {
+                const el = await page.$(selector).catch(() => null);
+                if (el) await page.select(selector, value);
+            }
+        };
+
+        await selectData('select[name="visit_reason"], #visit_reason', visitor_data.visit_reason);
+        await selectData('select[name="gender"], #gender', visitor_data.gender);
+        await selectData('select[name="document_type"], #document_type', visitor_data.document_type);
+
+        // 5. Document / File Upload
+        if (visitor_data.document_path) {
+            console.log('Uploading Document:', visitor_data.document_path);
+            if (fs.existsSync(visitor_data.document_path)) {
+                const fileInput = await page.$('input[type="file"]');
+                if (fileInput) {
+                    await fileInput.uploadFile(visitor_data.document_path);
+                }
+            } else {
+                console.log('Warning: File path exist nahi karta ->', visitor_data.document_path);
+            }
+        }
+
+        // 6. 'Add' button par click karein (List me add karne ke liye)
+        const addBtn = await page.evaluateHandle(() => {
+            const buttons = Array.from(document.querySelectorAll('button'));
+            return buttons.find(b => b.textContent.trim() === 'Add');
+        });
+        if (addBtn) {
+            await addBtn.click();
+            await page.waitForTimeout(1000); // Wait for list update
+        }
+
+        // 7. Final 'Submit Check-In' button par click karein
+        const submitFinalBtn = await page.evaluateHandle(() => {
+            const buttons = Array.from(document.querySelectorAll('button'));
+            return buttons.find(b => b.textContent.trim().includes('Submit Check-In') || b.textContent.trim() === 'Submit');
+        });
+        if (submitFinalBtn) {
+            await submitFinalBtn.click();
+        }
+
+        // 8. Toast/Success Status Capture Karein (Aapke login wale logic jaisa)
+        let toastData = { success: false, message: '' };
+        try {
+            await page.waitForSelector('.Toastify__toast', { timeout: 10000 });
+            toastData = await page.evaluate(() => {
+                const toastEl = document.querySelector('.Toastify__toast');
+                if (!toastEl) return { success: false, message: '' };
+                const text = toastEl.innerText ? toastEl.innerText.trim() : '';
+                const isSuccessClass = toastEl.classList.contains('Toastify__toast--success');
+                const isSuccessText = text.toLowerCase().includes('success') || text.toLowerCase().includes('saved');
+                return { success: isSuccessClass || isSuccessText, message: text };
+            });
+        } catch (e) {
+            console.log('Toast capture timeout.');
+        }
+
+        await browser.close();
+
+        if (toastData.success) {
+            return res.json({
+                status: 'success',
+                message: toastData.message || 'Visitor successfully created!'
+            });
+        } else {
+            return res.status(400).json({
+                status: 'failed',
+                message: toastData.message || 'Form submit hua par success message nahi mila.',
+            });
+        }
+
+    } catch (error) {
+        if (browser) await browser.close();
+        return res.status(500).json({
+            status: 'error',
+            message: 'Automation Error: ' + error.message
+        });
+    }
+});
+
 app.listen(PORT, () => {
     console.log(`Server active on port ${PORT}`);
 });
