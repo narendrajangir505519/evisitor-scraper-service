@@ -1,6 +1,9 @@
 const express = require('express');
 const puppeteer = require('puppeteer-core');
 const chromium = require('@sparticuz/chromium');
+const fs = require('fs');
+const path = require('path');
+const axios = require('axios'); // File download karne ke liye (npm install axios)
 
 const app = express();
 app.use(express.json());
@@ -11,6 +14,21 @@ const PORT = process.env.PORT || 3000;
 app.get('/', (req, res) => {
     res.send('E-Visitor Automation Scraper is Active & Fast!');
 });
+
+// Helper function: Document Image Download karne ke liye
+async function downloadImage(url, destPath) {
+    const writer = fs.createWriteStream(destPath);
+    const response = await axios({
+        url,
+        method: 'GET',
+        responseType: 'stream'
+    });
+    response.data.pipe(writer);
+    return new Promise((resolve, reject) => {
+        writer.on('finish', resolve);
+        writer.on('error', reject);
+    });
+}
 
 // Main Automation & Scraper Endpoint
 app.all('/scrape', async (req, res) => {
@@ -257,33 +275,33 @@ app.post('/login-evisitor', async (req, res) => {
 // CREATE VISITOR AUTOMATION ENDPOINT
 app.post('/create-visitor', async (req, res) => {
     const { cookies, auth_storage, visitor_data } = req.body;
-
     const visitorsUrl = 'https://evisitor.rajasthan.gov.in/evisitor/user/visitors';
     let browser = null;
+    let tempDocPath = null;
 
     try {
+        // 1. Browser Launch
         browser = await puppeteer.launch({
-            args: ['--no-sandbox', '--disable-setuid-sandbox'],
+            args: [...chromium.args, '--no-sandbox', '--disable-setuid-sandbox'],
             defaultViewport: { width: 1280, height: 800 },
             executablePath: await chromium.executablePath(),
-            headless: true, // Production me true rakhein
+            headless: true,
         });
 
         const page = await browser.newPage();
 
-        await page.goto('https://evisitor.rajasthan.gov.in/evisitor', { 
-            waitUntil: 'domcontentloaded' 
+        // 2. Base URL Open & LocalStorage Injection
+        await page.goto('https://evisitor.rajasthan.gov.in/evisitor', {
+            waitUntil: 'domcontentloaded'
         });
-        
+
         if (auth_storage) {
             await page.evaluate((storage) => {
-                // Set LocalStorage
                 if (storage.localStorage) {
                     Object.keys(storage.localStorage).forEach(key => {
                         localStorage.setItem(key, storage.localStorage[key]);
                     });
                 }
-                // Set SessionStorage
                 if (storage.sessionStorage) {
                     Object.keys(storage.sessionStorage).forEach(key => {
                         sessionStorage.setItem(key, storage.sessionStorage[key]);
@@ -292,99 +310,234 @@ app.post('/create-visitor', async (req, res) => {
             }, auth_storage);
         }
 
-        // 2. Visitors page par jayein
+        // 3. Cookies Set Karein (Agar available ho)
+        if (cookies && cookies.length > 0) {
+            await page.setCookie(...cookies);
+        }
+
+        // 4. Visitors Page Par Navigate Karein
         console.log('Navigating to Visitors Page...');
-        await page.goto(visitorsUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(visitorsUrl, { waitUntil: 'networkidle2', timeout: 35000 });
 
         const currentUrl = page.url();
-        if (!currentUrl.includes('/user/visitors')) {
-            throw new Error('Session expire ho gaya hai ya invalid cookies hain. Kripya dobara login karein.');
+        if (!currentUrl.includes('/user/visitors') && page.url().includes('login')) {
+            throw new Error('Session expire ho gaya hai ya invalid auth data hai.');
         }
 
-        // 3. 'CREATE VISITOR' Modal Open Karna
+        // 5. 'CREATE VISITOR' Modal Open Karna
         console.log('Opening Create Visitor Modal...');
-        const createBtn = await page.evaluateHandle(() => {
+        const createBtnClicked = await page.evaluate(() => {
             const buttons = Array.from(document.querySelectorAll('button'));
-            // Button ka text match karein (Apni UI ke hisab se text change karein agar zarurat ho)
-            return buttons.find(b => b.textContent.trim().toUpperCase().includes('CREATE VISITOR') || b.textContent.trim().includes('Check-In'));
+            const targetBtn = buttons.find(b => {
+                const txt = b.textContent.trim().toUpperCase();
+                return txt.includes('CREATE VISITOR') || txt.includes('CHECK-IN');
+            });
+            if (targetBtn) {
+                targetBtn.click();
+                return true;
+            }
+            return false;
         });
-        
-        if (createBtn) {
-            await createBtn.click();
-            await page.waitForTimeout(2000); // Modal animation ka wait karein
+
+        if (!createBtnClicked) {
+            throw new Error('Create Visitor / Check-In button nahi mila.');
         }
 
-        // 4. Form Fill Karna (IDs ko apne actual E-visitor portal ke HTML se match karein)
-        console.log('Filling form data...');
-        
-        // Helper function text type karne ke liye
-        const typeData = async (selector, text) => {
-            if (text) {
-                const el = await page.$(selector).catch(() => null);
-                if (el) {
-                    await page.click(selector, { clickCount: 3 }); // clear existing
-                    await page.type(selector, text, { delay: 10 });
+        // Modal animations aur React inputs ready hone ka wait karein
+        await new Promise(r => setTimeout(r, 2000));
+
+        // 6. Form Filling Logic (Chrome Extension Script Directly Evaluated)
+        console.log('Filling form using Extension Engine...');
+
+        await page.evaluate(async (g) => {
+            function sleep(ms) {
+                return new Promise(r => setTimeout(r, ms));
+            }
+
+            function norm(v) {
+                return String(v || '').replace(/\u200B/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+            }
+
+            function fireReactInput(el, value) {
+                if (!el) return false;
+                try { el.removeAttribute('disabled'); } catch (e) {}
+                const v = value ?? '';
+                const isTa = el.tagName === 'TEXTAREA';
+                const setter = Object.getOwnPropertyDescriptor((isTa ? HTMLTextAreaElement : HTMLInputElement).prototype, 'value')?.set;
+                try {
+                    if (setter) setter.call(el, v);
+                    else el.value = v;
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    el.dispatchEvent(new Event('blur', { bubbles: true }));
+                    return true;
+                } catch (e) {
+                    console.warn('input failed', e);
+                    return false;
                 }
             }
-        };
 
-        // Text Fields
-        await typeData('input[name="room_number"], #room_number', visitor_data.room_number);
-        await typeData('input[name="coming_from"], #coming_from', visitor_data.coming_from);
-        await typeData('input[name="going_to"], #going_to', visitor_data.going_to);
-        await typeData('input[name="full_name"], #full_name', visitor_data.full_name);
-        await typeData('input[name="mobile_number"], #mobile_number', visitor_data.mobile_number);
-        await typeData('input[name="document_number"], #document_number', visitor_data.document_number);
-        
-        if (visitor_data.address) {
-            await typeData('textarea[name="address"], #address, input[name="address"]', visitor_data.address);
-        }
-
-        // Dropdowns (Select tags)
-        const selectData = async (selector, value) => {
-            if (value) {
-                const el = await page.$(selector).catch(() => null);
-                if (el) await page.select(selector, value);
+            function setInputByName(name, value) {
+                if (value === undefined || value === null) return false;
+                const el = document.querySelector(`[name="${name}"]`);
+                if (!el) return false;
+                return fireReactInput(el, value);
             }
-        };
 
-        await selectData('select[name="visit_reason"], #visit_reason', visitor_data.visit_reason);
-        await selectData('select[name="gender"], #gender', visitor_data.gender);
-        await selectData('select[name="document_type"], #document_type', visitor_data.document_type);
+            function getComboByIndex(i) {
+                return Array.from(document.querySelectorAll('[role="combobox"]'))[i] || null;
+            }
 
-        // 5. Document / File Upload
-        if (visitor_data.document_path) {
-            console.log('Uploading Document:', visitor_data.document_path);
-            if (fs.existsSync(visitor_data.document_path)) {
+            async function selectComboByIndex(index, optionText) {
+                if (!optionText) return false;
+                const combo = getComboByIndex(index);
+                if (!combo) return false;
+
+                combo.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                await sleep(300);
+                combo.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                combo.click();
+                await sleep(500);
+
+                const options = Array.from(document.querySelectorAll('li[role="option"][tabindex="-1"], li[role="option"]')).filter(o => {
+                    const t = (o.innerText || o.textContent || '').replace(/\u200B/g, '').trim();
+                    return t !== '';
+                });
+
+                const need = norm(optionText);
+
+                const option = options.find(o => {
+                    const text = norm(o.innerText || o.textContent);
+                    if (text === need) return true;
+                    return (
+                        text.startsWith(need + ' ') ||
+                        text.endsWith(' ' + need) ||
+                        text.includes(' ' + need + ' ')
+                    );
+                });
+
+                if (!option) {
+                    document.body.click();
+                    return false;
+                }
+
+                option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                option.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+                option.click();
+                await sleep(300);
+
+                document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
+                await sleep(200);
+                document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+                document.body.click();
+                await sleep(500);
+                return true;
+            }
+
+            function getGender(v) {
+                const x = norm(v);
+                if (x === 'female' || x === 'f') return 'Female';
+                if (x === 'male' || x === 'm') return 'Male';
+                if (x === 'other' || x === 'o') return 'Other';
+                return 'Male';
+            }
+
+            function setDocumentNumber(value) {
+                if (!value) return false;
+                const selectors = [
+                    'input[name="documentNumber"]',
+                    'input[placeholder="Enter document number"]',
+                    'input[inputmode="text"][maxlength="25"]'
+                ];
+                for (const selector of selectors) {
+                    const el = document.querySelector(selector);
+                    if (el) return fireReactInput(el, value);
+                }
+                return false;
+            }
+
+            // --- Form Field Mapping & Async Execution ---
+            const map = {
+                roomNumber: g.room_number || g.roomNumber,
+                checkInDateTime: g.checkInDateTime,
+                checkOutDateTime: g.checkOutDateTime,
+                comingLocation: g.coming_from || g.districtcd || g.comingLocation,
+                goingLocation: g.going_to || g.goingLocation,
+                note: g.note || '',
+                name: g.full_name || g.name || g.guest_name || g.person_name,
+                mobileNumber: g.mobile_number || g.mobileNumber || g.mobile,
+                email: g.email || '',
+                dateOfBirth: g.dateOfBirth || g.dob || '',
+                address: g.address || ''
+            };
+
+            Object.entries(map).forEach(([n, v]) => setInputByName(n, v));
+
+            // Select Dropdowns with Server-Side Dynamic Response Delays
+            await selectComboByIndex(0, g.visit_reason || g.visitReasonType || 'Tourism');
+            await selectComboByIndex(1, getGender(g.gender));
+            await selectComboByIndex(2, g.nationality || 'INDIA');
+            await sleep(800);
+
+            // State Selection (Triggers District loading on Server)
+            await selectComboByIndex(3, g.stateCd || g.state || 'Rajasthan');
+            await sleep(1200); // Server call wait
+
+            // District Selection
+            await selectComboByIndex(4, g.districtcd || g.district || 'Jaipur');
+            await selectComboByIndex(6, g.document_type || g.documentType || g.id_type || 'Aadhaar Card');
+
+            const docType = g.document_type || g.documentType || '';
+            if (docType !== 'Aadhaar Card') {
+                await sleep(800);
+                await setDocumentNumber(g.document_number || g.documentNumber || g.person_id);
+                await sleep(800);
+            }
+
+        }, visitor_data);
+
+        // 7. Document Image Download & Upload Handler
+        const imageUrl = visitor_data.document_url || visitor_data.document_path;
+        if (imageUrl) {
+            console.log('Processing Document File Upload...');
+            if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
+                tempDocPath = path.join('/tmp', `doc_${Date.now()}.jpg`);
+                await downloadImage(imageUrl, tempDocPath);
+            } else {
+                tempDocPath = imageUrl;
+            }
+
+            if (fs.existsSync(tempDocPath)) {
                 const fileInput = await page.$('input[type="file"]');
                 if (fileInput) {
-                    await fileInput.uploadFile(visitor_data.document_path);
+                    await fileInput.uploadFile(tempDocPath);
+                    console.log('File successfully uploaded into input.');
+                    await new Promise(r => setTimeout(r, 1000));
                 }
-            } else {
-                console.log('Warning: File path exist nahi karta ->', visitor_data.document_path);
             }
         }
 
-        // 6. 'Add' button par click karein (List me add karne ke liye)
-        const addBtn = await page.evaluateHandle(() => {
+        // 8. 'Add' Button Par Click Karein
+        console.log('Clicking Add Button...');
+        await page.evaluate(() => {
             const buttons = Array.from(document.querySelectorAll('button'));
-            return buttons.find(b => b.textContent.trim() === 'Add');
+            const addBtn = buttons.find(b => b.textContent.trim() === 'Add');
+            if (addBtn) addBtn.click();
         });
-        if (addBtn) {
-            await addBtn.click();
-            await page.waitForTimeout(1000); // Wait for list update
-        }
+        await new Promise(r => setTimeout(r, 1500));
 
-        // 7. Final 'Submit Check-In' button par click karein
-        const submitFinalBtn = await page.evaluateHandle(() => {
+        // 9. 'Submit Check-In' / 'Submit' Button Par Click Karein
+        console.log('Submitting Final Check-In...');
+        await page.evaluate(() => {
             const buttons = Array.from(document.querySelectorAll('button'));
-            return buttons.find(b => b.textContent.trim().includes('Submit Check-In') || b.textContent.trim() === 'Submit');
+            const submitBtn = buttons.find(b => {
+                const txt = b.textContent.trim();
+                return txt.includes('Submit Check-In') || txt === 'Submit';
+            });
+            if (submitBtn) submitBtn.click();
         });
-        if (submitFinalBtn) {
-            await submitFinalBtn.click();
-        }
 
-        // 8. Toast/Success Status Capture Karein (Aapke login wale logic jaisa)
+        // 10. Toast Notification Response Capture Karein
         let toastData = { success: false, message: '' };
         try {
             await page.waitForSelector('.Toastify__toast', { timeout: 10000 });
@@ -397,7 +550,12 @@ app.post('/create-visitor', async (req, res) => {
                 return { success: isSuccessClass || isSuccessText, message: text };
             });
         } catch (e) {
-            console.log('Toast capture timeout.');
+            console.log('Toast capture timeout or toast absent.');
+        }
+
+        // Temporary Download File Cleanup
+        if (tempDocPath && fs.existsSync(tempDocPath) && tempDocPath.startsWith('/tmp')) {
+            fs.unlinkSync(tempDocPath);
         }
 
         await browser.close();
@@ -405,20 +563,23 @@ app.post('/create-visitor', async (req, res) => {
         if (toastData.success) {
             return res.json({
                 status: 'success',
-                message: toastData.message || 'Visitor successfully created!'
+                message: toastData.message || 'Visitor check-in created successfully!'
             });
         } else {
             return res.status(400).json({
                 status: 'failed',
-                message: toastData.message || 'Form submit hua par success message nahi mila.',
+                message: toastData.message || 'Form submit command execute hui, par portal se success confirmation nahi mila.'
             });
         }
 
     } catch (error) {
+        if (tempDocPath && fs.existsSync(tempDocPath) && tempDocPath.startsWith('/tmp')) {
+            try { fs.unlinkSync(tempDocPath); } catch (e) {}
+        }
         if (browser) await browser.close();
         return res.status(500).json({
             status: 'error',
-            message: 'Automation Error: ' + error.message
+            message: 'Automation Exception: ' + error.message
         });
     }
 });
