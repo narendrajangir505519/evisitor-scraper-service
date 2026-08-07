@@ -117,9 +117,7 @@ app.post('/login-evisitor', async (req, res) => {
         // -------------------------------------------------------------
         console.log('Not logged in. Redirected to login page. Starting login automation...');
         
-        if (!currentUrl.includes('/evisitor')) {
-            await page.goto(loginBaseUrl, { waitUntil: 'networkidle2', timeout: 45000 });
-        }
+        await page.goto(loginBaseUrl, { waitUntil: 'networkidle2', timeout: 45000 });
 
         // Top Login Button Click
         const topLoginBtn = await page.$('button.login-btn');
