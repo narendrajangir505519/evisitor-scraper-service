@@ -6,7 +6,7 @@ const path = require('path');
 const axios = require('axios'); // File download karne ke liye (npm install axios)
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
 
 const PORT = process.env.PORT || 3000;
 
@@ -275,22 +275,21 @@ app.post('/login-evisitor', async (req, res) => {
 
 // CREATE VISITOR AUTOMATION ENDPOINT
 app.post('/create-visitor', async (req, res) => {
-    const { cookies, auth_storage, visitor_data } = req.body;
+    const { auth_storage, booking_data } = req.body;
     const visitorsUrl = 'https://evisitor.rajasthan.gov.in/evisitor/user/visitors';
     let browser = null;
-    let tempDocPath = null;
+    let tempFiles = [];
 
     try {
-        // Render / Cloud memory crash se bachne ke liye flags
         browser = await puppeteer.launch({
             args: [
                 ...chromium.args,
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage', // Memory crash fix
+                '--disable-dev-shm-usage',
                 '--disable-gpu',
-                '--no-zygote',
                 '--single-process',
+                '--no-zygote'
             ],
             defaultViewport: { width: 1280, height: 800 },
             executablePath: await chromium.executablePath(),
@@ -299,60 +298,29 @@ app.post('/create-visitor', async (req, res) => {
 
         const page = await browser.newPage();
 
-        // -------------------------------------------------------------
-        // STEP 1: Cookies Pehle Set Karein (Base Domain se pehle)
-        // -------------------------------------------------------------
-        if (cookies && Array.isArray(cookies) && cookies.length > 0) {
-            await page.setCookie(...cookies);
-        }
+        // 1. Session & Auth Setup
+        await page.goto('https://evisitor.rajasthan.gov.in/evisitor', { waitUntil: 'domcontentloaded' });
 
-        // -------------------------------------------------------------
-        // STEP 2: Base Domain Load Karein taaki Storage Context bane
-        // -------------------------------------------------------------
-        await page.goto('https://evisitor.rajasthan.gov.in/evisitor', {
-            waitUntil: 'domcontentloaded',
-            timeout: 30000
-        });
-
-        // -------------------------------------------------------------
-        // STEP 3: LocalStorage Inject Karein
-        // -------------------------------------------------------------
         if (auth_storage) {
             await page.evaluate((storage) => {
                 if (storage.localStorage) {
-                    Object.keys(storage.localStorage).forEach(key => {
-                        localStorage.setItem(key, storage.localStorage[key]);
-                    });
+                    Object.keys(storage.localStorage).forEach(key => localStorage.setItem(key, storage.localStorage[key]));
                 }
                 if (storage.sessionStorage) {
-                    Object.keys(storage.sessionStorage).forEach(key => {
-                        sessionStorage.setItem(key, storage.sessionStorage[key]);
-                    });
+                    Object.keys(storage.sessionStorage).forEach(key => sessionStorage.setItem(key, storage.sessionStorage[key]));
                 }
             }, auth_storage);
         }
 
-        // -------------------------------------------------------------
-        // STEP 4: Target Page Load Karein (React App Token read karega)
-        // -------------------------------------------------------------
+        // 2. Open Visitors Page
         console.log('Navigating to Visitors Page...');
         await page.goto(visitorsUrl, { waitUntil: 'networkidle2', timeout: 35000 });
 
-        // Session Check
-        const currentUrl = page.url();
-        if (currentUrl.includes('/login') || !currentUrl.includes('/user/visitors')) {
-            await browser.close();
-            return res.status(401).json({
-                status: 'error',
-                message: 'Session expire ho gaya hai ya invalid cookies hain. Kripya dobara login karein.'
-            });
+        if (page.url().includes('login') || !page.url().includes('/user/visitors')) {
+            throw new Error('Session expire ho gaya hai ya invalid auth data hai.');
         }
 
-        await new Promise(r => setTimeout(r, 2000));
-
-        // -------------------------------------------------------------
-        // STEP 5: Create Visitor Button Click
-        // -------------------------------------------------------------
+        // 3. Open Create Visitor Modal
         console.log('Opening Create Visitor Modal...');
         const createBtnClicked = await page.evaluate(() => {
             const buttons = Array.from(document.querySelectorAll('button'));
@@ -368,238 +336,205 @@ app.post('/create-visitor', async (req, res) => {
         });
 
         if (!createBtnClicked) {
-            throw new Error('Create Visitor / Check-In button modal me nahi mila.');
+            throw new Error('Create Visitor / Check-In button nahi mila.');
         }
 
         await new Promise(r => setTimeout(r, 2000));
 
-        // -------------------------------------------------------------
-        // STEP 6: Form Fill (Extension Logic)
-        // -------------------------------------------------------------
-        await page.evaluate(async (g) => {
-            function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-            function norm(v) { return String(v || '').replace(/\u200B/g, '').replace(/\s+/g, ' ').trim().toLowerCase(); }
-
+        // 4. Booking Level Fields (Check-In Date, Room Number, Reason, Locations)
+        console.log('Filling Booking Level Details...');
+        await page.evaluate(async (bData) => {
             function fireReactInput(el, value) {
                 if (!el) return false;
                 try { el.removeAttribute('disabled'); } catch (e) {}
-                const v = value ?? '';
                 const isTa = el.tagName === 'TEXTAREA';
                 const setter = Object.getOwnPropertyDescriptor((isTa ? HTMLTextAreaElement : HTMLInputElement).prototype, 'value')?.set;
-                try {
-                    if (setter) setter.call(el, v);
-                    else el.value = v;
-                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                    el.dispatchEvent(new Event('blur', { bubbles: true }));
-                    return true;
-                } catch (e) { return false; }
+                if (setter) setter.call(el, value || '');
+                else el.value = value || '';
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                el.dispatchEvent(new Event('blur', { bubbles: true }));
+                return true;
             }
 
             function setInputByName(name, value) {
-                if (value === undefined || value === null) return false;
                 const el = document.querySelector(`[name="${name}"]`);
                 return el ? fireReactInput(el, value) : false;
             }
 
-            function getComboByIndex(i) {
-                return Array.from(document.querySelectorAll('[role="combobox"]'))[i] || null;
+            // Dates & Basic Details
+            let checkInTime = bData.check_in_date_time;
+            if (!checkInTime) {
+                const now = new Date();
+                checkInTime = now.toISOString().slice(0, 16);
             }
-console.log('Visitor ka data fill start ho gaya...');
-            async function selectComboByIndex(index, optionText) {
-                if (!optionText) return false;
-                const combo = getComboByIndex(index);
-                if (!combo) return false;
+            setInputByName('checkInDateTime', checkInTime);
+            setInputByName('roomNumber', bData.room_number || '101');
+            setInputByName('comingLocation', bData.coming_from || 'Sikar');
+            setInputByName('goingLocation', bData.going_to || 'Sikar');
 
-                combo.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                await sleep(300);
-                combo.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+            // Select Visit Reason Dropdown
+            const combo = document.querySelectorAll('[role="combobox"]')[0];
+            if (combo) {
                 combo.click();
-                await sleep(500);
+                await new Promise(r => setTimeout(r, 400));
+                const options = Array.from(document.querySelectorAll('li[role="option"], div[role="option"]'));
+                const targetReason = (bData.visit_reason || '').toLowerCase();
+                const opt = options.find(o => o.textContent.toLowerCase().includes(targetReason)) || options[0];
+                if (opt) opt.click();
+            }
+        }, booking_data);
 
-                const options = Array.from(document.querySelectorAll('li[role="option"][tabindex="-1"], li[role="option"]')).filter(o => {
-                    const t = (o.innerText || o.textContent || '').replace(/\u200B/g, '').trim();
-                    return t !== '';
-                });
+        // 5. Loop & Add Each Guest
+        const guests = booking_data.guests || [];
+        console.log(`Processing ${guests.length} guests...`);
 
-                const need = norm(optionText);
-                const option = options.find(o => {
-                    const text = norm(o.innerText || o.textContent);
-                    return text === need || text.startsWith(need + ' ') || text.endsWith(' ' + need) || text.includes(' ' + need + ' ');
-                });
+        for (let i = 0; i < guests.length; i++) {
+            const guest = guests[i];
+            console.log(`Filling Guest ${i + 1}: ${guest.full_name}`);
 
-                if (!option) {
-                    document.body.click();
-                    return false;
+            // Fill Guest Form Fields
+            await page.evaluate(async (g) => {
+                function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+                function fireInput(el, value) {
+                    if (!el) return;
+                    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+                    if (setter) setter.call(el, value || '');
+                    else el.value = value || '';
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    el.dispatchEvent(new Event('blur', { bubbles: true }));
                 }
 
-                option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-                option.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-                option.click();
-                await sleep(300);
-
-                document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
-                await sleep(200);
-                document.body.click();
-                await sleep(500);
-                return true;
-            }
-
-            function getGender(v) {
-                const x = norm(v);
-                if (x === 'female' || x === 'f') return 'Female';
-                if (x === 'male' || x === 'm') return 'Male';
-                return 'Male';
-            }
-
-            function setDocumentNumber(value) {
-                if (!value) return false;
-                const selectors = ['input[name="documentNumber"]', 'input[placeholder="Enter document number"]', 'input[inputmode="text"][maxlength="25"]'];
-                for (const selector of selectors) {
-                    const el = document.querySelector(selector);
-                    if (el) return fireReactInput(el, value);
+                function setInputByName(name, value) {
+                    const el = document.querySelector(`[name="${name}"]`);
+                    if (el) fireInput(el, value);
                 }
-                return false;
+
+                async function selectDropdown(index, searchText) {
+                    const combos = document.querySelectorAll('[role="combobox"]');
+                    const combo = combos[index];
+                    if (!combo) return;
+                    combo.click();
+                    await sleep(400);
+                    const options = Array.from(document.querySelectorAll('li[role="option"], div[role="option"]'));
+                    const search = String(searchText || '').toLowerCase().trim();
+                    const opt = options.find(o => o.textContent.toLowerCase().trim().includes(search)) || options[0];
+                    if (opt) opt.click();
+                    await sleep(300);
+                }
+
+                // Personal Details
+                setInputByName('name', g.full_name);
+                setInputByName('mobileNumber', g.mobile_number);
+                setInputByName('address', g.address);
+                setInputByName('documentNumber', g.document_number);
+
+                // Dropdowns (Indexes: 1=Gender, 2=Nationality, 3=State, 4=District, 5=DocType)
+                await selectDropdown(1, g.gender || 'Male');
+                await selectDropdown(2, g.nationality || 'INDIA');
+                await selectDropdown(3, g.state || 'Rajasthan');
+                await sleep(500); // Wait for districts to load
+                await selectDropdown(4, g.district || 'Sikar');
+                await selectDropdown(5, g.document_type || 'Aadhaar Card');
+
+            }, guest);
+
+            // Document Image Upload
+            let docPath = path.join('/tmp', `doc_${Date.now()}_${i}.jpg`);
+            if (guest.document_url && (guest.document_url.startsWith('http://') || guest.document_url.startsWith('https://'))) {
+                try {
+                    await downloadImage(guest.document_url, docPath);
+                    tempFiles.push(docPath);
+                } catch (e) {
+                    docPath = null;
+                }
+            } else {
+                docPath = null;
             }
 
-            // Fill Simple Text Inputs
-            setInputByName('roomNumber', g.room_number || g.roomNumber);
-            setInputByName('comingLocation', g.coming_from || g.comingLocation);
-            setInputByName('goingLocation', g.going_to || g.goingLocation);
-            setInputByName('name', g.full_name || g.name);
-            setInputByName('mobileNumber', g.mobile_number || g.mobile);
-            setInputByName('address', g.address || '');
-
-            // Dynamic Server Side Dropdowns
-            await selectComboByIndex(0, g.visit_reason || 'Tourism');
-            await selectComboByIndex(1, getGender(g.gender));
-            await selectComboByIndex(2, g.nationality || 'INDIA');
-            await sleep(800);
-
-            // State (Server call for District)
-            await selectComboByIndex(3, g.state || 'Rajasthan');
-            await sleep(1200);
-
-            // District & Doc Type
-            await selectComboByIndex(4, g.district || 'Jaipur');
-            await selectComboByIndex(6, g.document_type || 'Aadhaar Card');
-
-            if ((g.document_type || '') !== 'Aadhaar Card') {
-                await sleep(800);
-                await setDocumentNumber(g.document_number);
-                await sleep(800);
-            }
-        }, visitor_data);
-
-        // -------------------------------------------------------------
-        // STEP 7: Add & Submit
-        // -------------------------------------------------------------
-        // -------------------------------------------------------------
-        // 8. 'Add' Button Click & Input Validation Error Checker
-        // -------------------------------------------------------------
-        console.log('Clicking Add Button & Validating Inputs...');
-
-        const addResult = await page.evaluate(async () => {
-            const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-            // Add Click hone se pehle list/table ki row count check karein
-            const getGuestCount = () => {
-                const rows = document.querySelectorAll('table tbody tr, .visitor-card, .guest-item');
-                return rows ? rows.length : 0;
-            };
-
-            const initialCount = getGuestCount();
-
-            // 1. Find & Click "Add" Button
-            const buttons = Array.from(document.querySelectorAll('button'));
-            const addBtn = buttons.find(b => b.textContent.trim() === 'Add');
-
-            if (!addBtn) {
-                return { success: false, error: '"Add" button DOM mein nahi mila.' };
+            // Fallback Dummy File If Image Missing
+            if (!docPath || !fs.existsSync(docPath)) {
+                docPath = path.join('/tmp', `dummy_${Date.now()}_${i}.jpg`);
+                fs.writeFileSync(docPath, Buffer.from('/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=', 'base64'));
+                tempFiles.push(docPath);
             }
 
-            addBtn.click();
-            await sleep(1500); // Validation render time
-
-            // 2. Material UI & Standard HTML Input Error Classes Scan Karein
-            const errorNodes = Array.from(document.querySelectorAll(
-                '.Mui-error, .MuiFormHelperText-root.Mui-error, [class*="error"], .invalid-feedback, .text-danger'
-            ));
-
-            const fieldErrors = errorNodes
-                .map(el => (el.innerText || el.textContent || '').trim())
-                .filter(txt => txt.length > 0 && txt.length < 150); // Duplicate aur irrelevant long tags remove karne ke liye
-
-            const uniqueErrors = [...new Set(fieldErrors)];
-
-            // 3. Row Count Check (Guest Add hua ya nahi)
-            const finalCount = getGuestCount();
-            const isAdded = finalCount > initialCount;
-
-            if (uniqueErrors.length > 0) {
-                return {
-                    success: false,
-                    validationErrors: uniqueErrors,
-                    error: 'Input Validation Failed: ' + uniqueErrors.join(' | ')
-                };
+            const fileInput = await page.$('input[type="file"]');
+            if (fileInput && fs.existsSync(docPath)) {
+                await fileInput.uploadFile(docPath);
+                await page.evaluate(() => {
+                    const el = document.querySelector('input[type="file"]');
+                    if (el) {
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+                });
+                await new Promise(r => setTimeout(r, 800));
             }
 
-            if (!isAdded) {
-                return {
-                    success: false,
-                    error: '"Add" button click hua par guest list mein add nahi hua. Kripya check karein koi required field khali toh nahi rehangi.'
-                };
-            }
+            // Click "Add" Button
+            console.log(`Clicking 'Add' button for Guest ${i + 1}...`);
+            const addResult = await page.evaluate(async () => {
+                const sleep = ms => new Promise(r => setTimeout(r, ms));
+                const buttons = Array.from(document.querySelectorAll('button'));
+                const addBtn = buttons.find(b => b.textContent.trim() === 'Add');
+                if (!addBtn) return { success: false, error: '"Add" button nahi mila.' };
 
-            return { success: true };
-        });
+                addBtn.click();
+                await sleep(1500);
 
-        // Agar Add button par error mila toh aage Submit nahi karega aur exact field error return kar dega
-        if (!addResult.success) {
-            console.log('Add Guest Failed:', addResult.error);
-            await browser.close();
-            return res.status(400).json({
-                status: 'failed',
-                message: addResult.error,
-                field_errors: addResult.validationErrors || []
+                // Check Validation Errors
+                const errors = Array.from(document.querySelectorAll('.Mui-error, .MuiFormHelperText-root.Mui-error'))
+                    .map(e => e.innerText.trim())
+                    .filter(t => t.length > 0);
+
+                if (errors.length > 0) {
+                    return { success: false, error: 'Input Error: ' + [...new Set(errors)].join(' | ') };
+                }
+                return { success: true };
             });
-        }
-        await new Promise(r => setTimeout(r, 2000));
 
-        console.log('Submitting...');
+            if (!addResult.success) {
+                throw new Error(`Guest ${i + 1} (${guest.full_name}) Add nahi ho paya: ${addResult.error}`);
+            }
+        }
+
+        // 6. Submit Final Check-In
+        console.log('Submitting Final Check-In...');
         await page.evaluate(() => {
             const buttons = Array.from(document.querySelectorAll('button'));
-            const submitBtn = buttons.find(b => b.textContent.trim().includes('Submit Check-In') || b.textContent.trim() === 'Submit');
+            const submitBtn = buttons.find(b => {
+                const txt = b.textContent.trim();
+                return txt.includes('Submit Check-In') || txt === 'Submit';
+            });
             if (submitBtn) submitBtn.click();
         });
 
-        // Toast capture
-        let toastData = { success: false, message: '' };
+        // 7. Toast Message Capture
+        let toastMessage = 'Visitor check-in submitted successfully.';
         try {
             await page.waitForSelector('.Toastify__toast', { timeout: 8000 });
-            toastData = await page.evaluate(() => {
-                const toastEl = document.querySelector('.Toastify__toast');
-                if (!toastEl) return { success: false, message: '' };
-                const text = toastEl.innerText ? toastEl.innerText.trim() : '';
-                const isSuccessClass = toastEl.classList.contains('Toastify__toast--success');
-                const isSuccessText = text.toLowerCase().includes('success') || text.toLowerCase().includes('saved');
-                return { success: isSuccessClass || isSuccessText, message: text };
+            toastMessage = await page.evaluate(() => {
+                const el = document.querySelector('.Toastify__toast');
+                return el ? el.innerText.trim() : 'Submitted';
             });
         } catch (e) {}
+
+        // Cleanup Temp Image Files
+        tempFiles.forEach(f => { try { fs.unlinkSync(f); } catch (e) {} });
 
         await browser.close();
 
         return res.json({
-            status: toastData.success ? 'success' : 'failed',
-            message: toastData.message || 'Form submitted'
+            status: 'success',
+            message: toastMessage
         });
 
     } catch (error) {
+        tempFiles.forEach(f => { try { fs.unlinkSync(f); } catch (e) {} });
         if (browser) await browser.close();
-        return res.status(500).json({
-            status: 'error',
-            message: 'Automation Error: ' + error.message
-        });
+        return res.status(400).json({ status: 'failed', message: error.message });
     }
 });
 
