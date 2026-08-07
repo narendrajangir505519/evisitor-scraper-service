@@ -492,12 +492,76 @@ console.log('Visitor ka data fill start ho gaya...');
         // -------------------------------------------------------------
         // STEP 7: Add & Submit
         // -------------------------------------------------------------
-        console.log('Clicking Add...');
-        await page.evaluate(() => {
+        // -------------------------------------------------------------
+        // 8. 'Add' Button Click & Input Validation Error Checker
+        // -------------------------------------------------------------
+        console.log('Clicking Add Button & Validating Inputs...');
+
+        const addResult = await page.evaluate(async () => {
+            const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+            // Add Click hone se pehle list/table ki row count check karein
+            const getGuestCount = () => {
+                const rows = document.querySelectorAll('table tbody tr, .visitor-card, .guest-item');
+                return rows ? rows.length : 0;
+            };
+
+            const initialCount = getGuestCount();
+
+            // 1. Find & Click "Add" Button
             const buttons = Array.from(document.querySelectorAll('button'));
             const addBtn = buttons.find(b => b.textContent.trim() === 'Add');
-            if (addBtn) addBtn.click();
+
+            if (!addBtn) {
+                return { success: false, error: '"Add" button DOM mein nahi mila.' };
+            }
+
+            addBtn.click();
+            await sleep(1500); // Validation render time
+
+            // 2. Material UI & Standard HTML Input Error Classes Scan Karein
+            const errorNodes = Array.from(document.querySelectorAll(
+                '.Mui-error, .MuiFormHelperText-root.Mui-error, [class*="error"], .invalid-feedback, .text-danger'
+            ));
+
+            const fieldErrors = errorNodes
+                .map(el => (el.innerText || el.textContent || '').trim())
+                .filter(txt => txt.length > 0 && txt.length < 150); // Duplicate aur irrelevant long tags remove karne ke liye
+
+            const uniqueErrors = [...new Set(fieldErrors)];
+
+            // 3. Row Count Check (Guest Add hua ya nahi)
+            const finalCount = getGuestCount();
+            const isAdded = finalCount > initialCount;
+
+            if (uniqueErrors.length > 0) {
+                return {
+                    success: false,
+                    validationErrors: uniqueErrors,
+                    error: 'Input Validation Failed: ' + uniqueErrors.join(' | ')
+                };
+            }
+
+            if (!isAdded) {
+                return {
+                    success: false,
+                    error: '"Add" button click hua par guest list mein add nahi hua. Kripya check karein koi required field khali toh nahi rehangi.'
+                };
+            }
+
+            return { success: true };
         });
+
+        // Agar Add button par error mila toh aage Submit nahi karega aur exact field error return kar dega
+        if (!addResult.success) {
+            console.log('Add Guest Failed:', addResult.error);
+            await browser.close();
+            return res.status(400).json({
+                status: 'failed',
+                message: addResult.error,
+                field_errors: addResult.validationErrors || []
+            });
+        }
         await new Promise(r => setTimeout(r, 2000));
 
         console.log('Submitting...');
