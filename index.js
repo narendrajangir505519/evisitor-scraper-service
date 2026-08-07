@@ -242,7 +242,7 @@ const cookies = cookiesResult.cookies;
         return res.json({
             status: 'success',
             toast_message: toastData.message || 'Login Successful',
-            captcha_used: captchaCode,
+            captcha_used: 'captchaCode',
             cookies: cookies,
             next_page_html: nextPageHtml
         });
