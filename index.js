@@ -232,7 +232,7 @@ app.post('/login-evisitor', async (req, res) => {
         await new Promise(resolve => setTimeout(resolve, 4000));
 
         const nextPageHtml = await page.content();
-        const cookies = await page.cookies();
+        const cookies = await page.cookies('https://evisitor.rajasthan.gov.in', 'https://rajasthan.gov.in');
 
         await browser.close();
 
