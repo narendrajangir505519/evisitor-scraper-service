@@ -256,37 +256,41 @@ app.post('/login-evisitor', async (req, res) => {
 
 // CREATE VISITOR AUTOMATION ENDPOINT
 app.post('/create-visitor', async (req, res) => {
-    const { cookies, visitor_data } = req.body;
-
-    // Validation: Cookies aur Data zaruri hai
-    if (!cookies || !visitor_data) {
-        return res.status(400).json({ 
-            status: 'error', 
-            message: 'Cookies aur visitor_data required hain.' 
-        });
-    }
+    const { cookies, auth_storage, visitor_data } = req.body;
 
     const visitorsUrl = 'https://evisitor.rajasthan.gov.in/evisitor/user/visitors';
     let browser = null;
 
     try {
         browser = await puppeteer.launch({
-            args: [
-                ...chromium.args,
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-            ],
+            args: ['--no-sandbox', '--disable-setuid-sandbox'],
             defaultViewport: { width: 1280, height: 800 },
             executablePath: await chromium.executablePath(),
-            headless: chromium.headless, // Production me true rakhein
+            headless: true, // Production me true rakhein
         });
 
         const page = await browser.newPage();
 
-        // 1. Session restore karne ke liye Cookies set karein
-        await page.setCookie(...cookies);
+        await page.goto('https://evisitor.rajasthan.gov.in/evisitor', { 
+            waitUntil: 'domcontentloaded' 
+        });
+        
+        if (auth_storage) {
+            await page.evaluate((storage) => {
+                // Set LocalStorage
+                if (storage.localStorage) {
+                    Object.keys(storage.localStorage).forEach(key => {
+                        localStorage.setItem(key, storage.localStorage[key]);
+                    });
+                }
+                // Set SessionStorage
+                if (storage.sessionStorage) {
+                    Object.keys(storage.sessionStorage).forEach(key => {
+                        sessionStorage.setItem(key, storage.sessionStorage[key]);
+                    });
+                }
+            }, auth_storage);
+        }
 
         // 2. Visitors page par jayein
         console.log('Navigating to Visitors Page...');
