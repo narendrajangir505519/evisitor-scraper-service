@@ -232,7 +232,10 @@ app.post('/login-evisitor', async (req, res) => {
         await new Promise(resolve => setTimeout(resolve, 4000));
 
         const nextPageHtml = await page.content();
-        const cookies = await page.cookies();
+        // const cookies = await page.cookies();
+        const client = await page.target().createCDPSession();
+const cookiesResult = await client.send('Network.getAllCookies');
+const cookies = cookiesResult.cookies;
 
         await browser.close();
 
