@@ -92,7 +92,6 @@ app.post('/login-evisitor', async (req, res) => {
     const { url, sso_id, password } = req.body;
 
     // Direct Protected Visitors URL
-    const visitorsUrl = 'https://evisitor.rajasthan.gov.in/evisitor/user/visitors';
     const loginBaseUrl = url || 'https://evisitor.rajasthan.gov.in/evisitor';
 
     let browser = null;
@@ -112,29 +111,6 @@ app.post('/login-evisitor', async (req, res) => {
         });
 
         const page = await browser.newPage();
-
-        // -------------------------------------------------------------
-        // STEP 1: Pehle Directly Visitors URL Hit Karke Session Check Karein
-        // -------------------------------------------------------------
-        console.log('Checking existing session via Visitors URL...');
-        await page.goto(visitorsUrl, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => null);
-
-        const currentUrl = page.url();
-
-        // Agar Redirect nahi hua aur URL par '/user/visitors' maujood hai = LOGIN ALREADY ACTIVE
-        if (currentUrl.includes('/user/visitors')) {
-            console.log('Session active! Already logged in.');
-            const pageHtml = await page.content();
-            const cookies = await page.cookies();
-            await browser.close();
-
-            return res.json({
-                status: 'already_logged_in',
-                toast_message: 'Session Already Active',
-                cookies: cookies,
-                next_page_html: pageHtml
-            });
-        }
 
         // -------------------------------------------------------------
         // STEP 2: Agar Redirect Ho Gaya -> Login Process Start Karein
