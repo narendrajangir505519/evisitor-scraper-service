@@ -403,7 +403,7 @@ app.post('/create-visitor', async (req, res) => {
             function getComboByIndex(i) {
                 return Array.from(document.querySelectorAll('[role="combobox"]'))[i] || null;
             }
-
+console.log('Visitor ka data fill start ho gaya...');
             async function selectComboByIndex(index, optionText) {
                 if (!optionText) return false;
                 const combo = getComboByIndex(index);
@@ -498,7 +498,7 @@ app.post('/create-visitor', async (req, res) => {
             const addBtn = buttons.find(b => b.textContent.trim() === 'Add');
             if (addBtn) addBtn.click();
         });
-        await new Promise(r => setTimeout(r, 1500));
+        await new Promise(r => setTimeout(r, 2000));
 
         console.log('Submitting...');
         await page.evaluate(() => {
