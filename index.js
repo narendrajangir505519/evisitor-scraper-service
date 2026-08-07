@@ -377,11 +377,12 @@ app.post('/create-visitor', async (req, res) => {
 
             try {
                 let checkInTime = bData.check_in_date_time;
-                if (!checkInTime) {
-                    const now = new Date();
-                    checkInTime = now.toISOString().slice(0, 16);
+                if (checkInTime) {
+                    let formatted = String(checkInTime).trim().replace(' ', 'T');
+                    let parsedDate = new Date(formatted);
+                    safeTime = parsedDate;
                 }
-                setInputByName('checkInDateTime', checkInTime);
+                setInputByName('checkInDateTime', safeTime);
                 setInputByName('roomNumber', bData.room_number || '101');
                 setInputByName('comingLocation', bData.coming_from || 'Sikar');
                 setInputByName('goingLocation', bData.going_to || 'Sikar');
