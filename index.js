@@ -298,16 +298,19 @@ app.post('/create-visitor', async (req, res) => {
 
         const page = await browser.newPage();
 
-        // 1. Session & Auth Setup
+        // Console logs capture for debugging
+        page.on('console', msg => console.log('PAGE LOG:', msg.text()));
+
+        // 1. Session Setup
         await page.goto('https://evisitor.rajasthan.gov.in/evisitor', { waitUntil: 'domcontentloaded' });
 
         if (auth_storage) {
             await page.evaluate((storage) => {
                 if (storage.localStorage) {
-                    Object.keys(storage.localStorage).forEach(key => localStorage.setItem(key, storage.localStorage[key]));
+                    Object.keys(storage.localStorage).forEach(k => localStorage.setItem(k, storage.localStorage[k]));
                 }
                 if (storage.sessionStorage) {
-                    Object.keys(storage.sessionStorage).forEach(key => sessionStorage.setItem(key, storage.sessionStorage[key]));
+                    Object.keys(storage.sessionStorage).forEach(k => sessionStorage.setItem(k, storage.sessionStorage[k]));
                 }
             }, auth_storage);
         }
@@ -320,7 +323,7 @@ app.post('/create-visitor', async (req, res) => {
             throw new Error('Session expire ho gaya hai ya invalid auth data hai.');
         }
 
-        // 3. Open Create Visitor Modal
+        // 3. Click Create Visitor
         console.log('Opening Create Visitor Modal...');
         const createBtnClicked = await page.evaluate(() => {
             const buttons = Array.from(document.querySelectorAll('button'));
@@ -341,16 +344,26 @@ app.post('/create-visitor', async (req, res) => {
 
         await new Promise(r => setTimeout(r, 2000));
 
-        // 4. Booking Level Fields (Check-In Date, Room Number, Reason, Locations)
+        // 4. Booking Level Fields
         console.log('Filling Booking Level Details...');
-        await page.evaluate(async (bData) => {
-            function fireReactInput(el, value) {
+        const bookingFillResult = await page.evaluate(async (bData) => {
+            function safeSetInputValue(el, value) {
                 if (!el) return false;
-                try { el.removeAttribute('disabled'); } catch (e) {}
-                const isTa = el.tagName === 'TEXTAREA';
-                const setter = Object.getOwnPropertyDescriptor((isTa ? HTMLTextAreaElement : HTMLInputElement).prototype, 'value')?.set;
-                if (setter) setter.call(el, value || '');
-                else el.value = value || '';
+                const val = value ?? '';
+                try {
+                    const proto = Object.getPrototypeOf(el);
+                    const descriptor = Object.getOwnPropertyDescriptor(proto, 'value') ||
+                                       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value') ||
+                                       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+                    
+                    if (descriptor && descriptor.set) {
+                        descriptor.set.call(el, val);
+                    } else {
+                        el.value = val;
+                    }
+                } catch (e) {
+                    el.value = val;
+                }
                 el.dispatchEvent(new Event('input', { bubbles: true }));
                 el.dispatchEvent(new Event('change', { bubbles: true }));
                 el.dispatchEvent(new Event('blur', { bubbles: true }));
@@ -359,33 +372,40 @@ app.post('/create-visitor', async (req, res) => {
 
             function setInputByName(name, value) {
                 const el = document.querySelector(`[name="${name}"]`);
-                return el ? fireReactInput(el, value) : false;
+                return el ? safeSetInputValue(el, value) : false;
             }
 
-            // Dates & Basic Details
-            let checkInTime = bData.check_in_date_time;
-            if (!checkInTime) {
-                const now = new Date();
-                checkInTime = now.toISOString().slice(0, 16);
-            }
-            setInputByName('checkInDateTime', checkInTime);
-            setInputByName('roomNumber', bData.room_number || '101');
-            setInputByName('comingLocation', bData.coming_from || 'Sikar');
-            setInputByName('goingLocation', bData.going_to || 'Sikar');
+            try {
+                let checkInTime = bData.check_in_date_time;
+                if (!checkInTime) {
+                    const now = new Date();
+                    checkInTime = now.toISOString().slice(0, 16);
+                }
+                setInputByName('checkInDateTime', checkInTime);
+                setInputByName('roomNumber', bData.room_number || '101');
+                setInputByName('comingLocation', bData.coming_from || 'Sikar');
+                setInputByName('goingLocation', bData.going_to || 'Sikar');
 
-            // Select Visit Reason Dropdown
-            const combo = document.querySelectorAll('[role="combobox"]')[0];
-            if (combo) {
-                combo.click();
-                await new Promise(r => setTimeout(r, 400));
-                const options = Array.from(document.querySelectorAll('li[role="option"], div[role="option"]'));
-                const targetReason = (bData.visit_reason || '').toLowerCase();
-                const opt = options.find(o => o.textContent.toLowerCase().includes(targetReason)) || options[0];
-                if (opt) opt.click();
+                const combo = document.querySelectorAll('[role="combobox"]')[0];
+                if (combo) {
+                    combo.click();
+                    await new Promise(r => setTimeout(r, 400));
+                    const options = Array.from(document.querySelectorAll('li[role="option"], div[role="option"]'));
+                    const targetReason = String(bData.visit_reason || '').toLowerCase();
+                    const opt = options.find(o => o.textContent.toLowerCase().includes(targetReason)) || options[0];
+                    if (opt) opt.click();
+                }
+                return { success: true };
+            } catch (err) {
+                return { success: false, field: 'Booking Base Fields', error: err.message };
             }
         }, booking_data);
 
-        // 5. Loop & Add Each Guest
+        if (!bookingFillResult.success) {
+            throw new Error(`Error at ${bookingFillResult.field}: ${bookingFillResult.error}`);
+        }
+
+        // 5. Guests Loop
         const guests = booking_data.guests || [];
         console.log(`Processing ${guests.length} guests...`);
 
@@ -393,27 +413,40 @@ app.post('/create-visitor', async (req, res) => {
             const guest = guests[i];
             console.log(`Filling Guest ${i + 1}: ${guest.full_name}`);
 
-            // Fill Guest Form Fields
-            await page.evaluate(async (g) => {
-                function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-                function fireInput(el, value) {
-                    if (!el) return;
-                    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
-                    if (setter) setter.call(el, value || '');
-                    else el.value = value || '';
+            const guestFillResult = await page.evaluate(async (g, index) => {
+                const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+                function safeSetInputValue(el, value) {
+                    if (!el) return false;
+                    const val = value ?? '';
+                    try {
+                        const proto = Object.getPrototypeOf(el);
+                        const descriptor = Object.getOwnPropertyDescriptor(proto, 'value') ||
+                                           Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value') ||
+                                           Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+
+                        if (descriptor && descriptor.set) {
+                            descriptor.set.call(el, val);
+                        } else {
+                            el.value = val;
+                        }
+                    } catch (e) {
+                        el.value = val;
+                    }
                     el.dispatchEvent(new Event('input', { bubbles: true }));
                     el.dispatchEvent(new Event('change', { bubbles: true }));
                     el.dispatchEvent(new Event('blur', { bubbles: true }));
+                    return true;
                 }
 
                 function setInputByName(name, value) {
                     const el = document.querySelector(`[name="${name}"]`);
-                    if (el) fireInput(el, value);
+                    return el ? safeSetInputValue(el, value) : false;
                 }
 
-                async function selectDropdown(index, searchText) {
+                async function selectDropdown(idx, searchText) {
                     const combos = document.querySelectorAll('[role="combobox"]');
-                    const combo = combos[index];
+                    const combo = combos[idx];
                     if (!combo) return;
                     combo.click();
                     await sleep(400);
@@ -424,23 +457,47 @@ app.post('/create-visitor', async (req, res) => {
                     await sleep(300);
                 }
 
-                // Personal Details
-                setInputByName('name', g.full_name);
-                setInputByName('mobileNumber', g.mobile_number);
-                setInputByName('address', g.address);
-                setInputByName('documentNumber', g.document_number);
+                let currentStep = 'Init';
+                try {
+                    currentStep = 'Name';
+                    setInputByName('name', g.full_name);
 
-                // Dropdowns (Indexes: 1=Gender, 2=Nationality, 3=State, 4=District, 5=DocType)
-                await selectDropdown(1, g.gender || 'Male');
-                await selectDropdown(2, g.nationality || 'INDIA');
-                await selectDropdown(3, g.state || 'Rajasthan');
-                await sleep(500); // Wait for districts to load
-                await selectDropdown(4, g.district || 'Sikar');
-                await selectDropdown(5, g.document_type || 'Aadhaar Card');
+                    currentStep = 'Mobile';
+                    setInputByName('mobileNumber', g.mobile_number);
 
-            }, guest);
+                    currentStep = 'Address';
+                    setInputByName('address', g.address);
 
-            // Document Image Upload
+                    currentStep = 'Document Number';
+                    setInputByName('documentNumber', g.document_number);
+
+                    currentStep = 'Gender Dropdown';
+                    await selectDropdown(1, g.gender || 'Male');
+
+                    currentStep = 'Nationality Dropdown';
+                    await selectDropdown(2, g.nationality || 'INDIA');
+
+                    currentStep = 'State Dropdown';
+                    await selectDropdown(3, g.state || 'Rajasthan');
+                    await sleep(500);
+
+                    currentStep = 'District Dropdown';
+                    await selectDropdown(4, g.district || 'Sikar');
+
+                    currentStep = 'Document Type Dropdown';
+                    await selectDropdown(5, g.document_type || 'Aadhaar Card');
+
+                    return { success: true };
+                } catch (err) {
+                    return { success: false, field: currentStep, error: err.message };
+                }
+            }, guest, i);
+
+            if (!guestFillResult.success) {
+                throw new Error(`Guest ${i + 1} (${guest.full_name}) failed at field '${guestFillResult.field}': ${guestFillResult.error}`);
+            }
+
+            // Image Upload
             let docPath = path.join('/tmp', `doc_${Date.now()}_${i}.jpg`);
             if (guest.document_url && (guest.document_url.startsWith('http://') || guest.document_url.startsWith('https://'))) {
                 try {
@@ -453,10 +510,9 @@ app.post('/create-visitor', async (req, res) => {
                 docPath = null;
             }
 
-            // Fallback Dummy File If Image Missing
             if (!docPath || !fs.existsSync(docPath)) {
                 docPath = path.join('/tmp', `dummy_${Date.now()}_${i}.jpg`);
-                fs.writeFileSync(docPath, Buffer.from('/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=', 'base64'));
+                fs.writeFileSync(docPath, Buffer.from('/9j/4AAQScript...', 'base64'));
                 tempFiles.push(docPath);
             }
 
@@ -473,7 +529,7 @@ app.post('/create-visitor', async (req, res) => {
                 await new Promise(r => setTimeout(r, 800));
             }
 
-            // Click "Add" Button
+            // Click Add
             console.log(`Clicking 'Add' button for Guest ${i + 1}...`);
             const addResult = await page.evaluate(async () => {
                 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -484,7 +540,6 @@ app.post('/create-visitor', async (req, res) => {
                 addBtn.click();
                 await sleep(1500);
 
-                // Check Validation Errors
                 const errors = Array.from(document.querySelectorAll('.Mui-error, .MuiFormHelperText-root.Mui-error'))
                     .map(e => e.innerText.trim())
                     .filter(t => t.length > 0);
@@ -500,7 +555,7 @@ app.post('/create-visitor', async (req, res) => {
             }
         }
 
-        // 6. Submit Final Check-In
+        // 6. Submit Check-In
         console.log('Submitting Final Check-In...');
         await page.evaluate(() => {
             const buttons = Array.from(document.querySelectorAll('button'));
@@ -511,7 +566,7 @@ app.post('/create-visitor', async (req, res) => {
             if (submitBtn) submitBtn.click();
         });
 
-        // 7. Toast Message Capture
+        // 7. Toast Result
         let toastMessage = 'Visitor check-in submitted successfully.';
         try {
             await page.waitForSelector('.Toastify__toast', { timeout: 8000 });
@@ -521,15 +576,10 @@ app.post('/create-visitor', async (req, res) => {
             });
         } catch (e) {}
 
-        // Cleanup Temp Image Files
         tempFiles.forEach(f => { try { fs.unlinkSync(f); } catch (e) {} });
-
         await browser.close();
 
-        return res.json({
-            status: 'success',
-            message: toastMessage
-        });
+        return res.json({ status: 'success', message: toastMessage });
 
     } catch (error) {
         tempFiles.forEach(f => { try { fs.unlinkSync(f); } catch (e) {} });
