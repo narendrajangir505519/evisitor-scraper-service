@@ -280,9 +280,16 @@ app.post('/create-visitor', async (req, res) => {
     let tempDocPath = null;
 
     try {
-        // 1. Browser Launch
+        // Render / Cloud memory crash se bachne ke liye flags
         browser = await puppeteer.launch({
-            args: [...chromium.args, '--no-sandbox', '--disable-setuid-sandbox'],
+            args: [
+                ...chromium.args,
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage', // Memory crash fix
+                '--disable-gpu',
+                '--no-zygote'
+            ],
             defaultViewport: { width: 1280, height: 800 },
             executablePath: await chromium.executablePath(),
             headless: true,
@@ -290,11 +297,24 @@ app.post('/create-visitor', async (req, res) => {
 
         const page = await browser.newPage();
 
-        // 2. Base URL Open & LocalStorage Injection
+        // -------------------------------------------------------------
+        // STEP 1: Cookies Pehle Set Karein (Base Domain se pehle)
+        // -------------------------------------------------------------
+        if (cookies && Array.isArray(cookies) && cookies.length > 0) {
+            await page.setCookie(...cookies);
+        }
+
+        // -------------------------------------------------------------
+        // STEP 2: Base Domain Load Karein taaki Storage Context bane
+        // -------------------------------------------------------------
         await page.goto('https://evisitor.rajasthan.gov.in/evisitor', {
-            waitUntil: 'domcontentloaded'
+            waitUntil: 'domcontentloaded',
+            timeout: 30000
         });
 
+        // -------------------------------------------------------------
+        // STEP 3: LocalStorage Inject Karein
+        // -------------------------------------------------------------
         if (auth_storage) {
             await page.evaluate((storage) => {
                 if (storage.localStorage) {
@@ -310,21 +330,25 @@ app.post('/create-visitor', async (req, res) => {
             }, auth_storage);
         }
 
-        // 3. Cookies Set Karein (Agar available ho)
-        if (cookies && cookies.length > 0) {
-            await page.setCookie(...cookies);
-        }
-
-        // 4. Visitors Page Par Navigate Karein
+        // -------------------------------------------------------------
+        // STEP 4: Target Page Load Karein (React App Token read karega)
+        // -------------------------------------------------------------
         console.log('Navigating to Visitors Page...');
         await page.goto(visitorsUrl, { waitUntil: 'networkidle2', timeout: 35000 });
 
+        // Session Check
         const currentUrl = page.url();
-        if (!currentUrl.includes('/user/visitors') && page.url().includes('login')) {
-            throw new Error('Session expire ho gaya hai ya invalid auth data hai.');
+        if (currentUrl.includes('/login') || !currentUrl.includes('/user/visitors')) {
+            await browser.close();
+            return res.status(401).json({
+                status: 'error',
+                message: 'Session expire ho gaya hai ya invalid cookies hain. Kripya dobara login karein.'
+            });
         }
 
-        // 5. 'CREATE VISITOR' Modal Open Karna
+        // -------------------------------------------------------------
+        // STEP 5: Create Visitor Button Click
+        // -------------------------------------------------------------
         console.log('Opening Create Visitor Modal...');
         const createBtnClicked = await page.evaluate(() => {
             const buttons = Array.from(document.querySelectorAll('button'));
@@ -340,23 +364,17 @@ app.post('/create-visitor', async (req, res) => {
         });
 
         if (!createBtnClicked) {
-            throw new Error('Create Visitor / Check-In button nahi mila.');
+            throw new Error('Create Visitor / Check-In button modal me nahi mila.');
         }
 
-        // Modal animations aur React inputs ready hone ka wait karein
         await new Promise(r => setTimeout(r, 2000));
 
-        // 6. Form Filling Logic (Chrome Extension Script Directly Evaluated)
-        console.log('Filling form using Extension Engine...');
-
+        // -------------------------------------------------------------
+        // STEP 6: Form Fill (Extension Logic)
+        // -------------------------------------------------------------
         await page.evaluate(async (g) => {
-            function sleep(ms) {
-                return new Promise(r => setTimeout(r, ms));
-            }
-
-            function norm(v) {
-                return String(v || '').replace(/\u200B/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
-            }
+            function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+            function norm(v) { return String(v || '').replace(/\u200B/g, '').replace(/\s+/g, ' ').trim().toLowerCase(); }
 
             function fireReactInput(el, value) {
                 if (!el) return false;
@@ -371,17 +389,13 @@ app.post('/create-visitor', async (req, res) => {
                     el.dispatchEvent(new Event('change', { bubbles: true }));
                     el.dispatchEvent(new Event('blur', { bubbles: true }));
                     return true;
-                } catch (e) {
-                    console.warn('input failed', e);
-                    return false;
-                }
+                } catch (e) { return false; }
             }
 
             function setInputByName(name, value) {
                 if (value === undefined || value === null) return false;
                 const el = document.querySelector(`[name="${name}"]`);
-                if (!el) return false;
-                return fireReactInput(el, value);
+                return el ? fireReactInput(el, value) : false;
             }
 
             function getComboByIndex(i) {
@@ -405,15 +419,9 @@ app.post('/create-visitor', async (req, res) => {
                 });
 
                 const need = norm(optionText);
-
                 const option = options.find(o => {
                     const text = norm(o.innerText || o.textContent);
-                    if (text === need) return true;
-                    return (
-                        text.startsWith(need + ' ') ||
-                        text.endsWith(' ' + need) ||
-                        text.includes(' ' + need + ' ')
-                    );
+                    return text === need || text.startsWith(need + ' ') || text.endsWith(' ' + need) || text.includes(' ' + need + ' ');
                 });
 
                 if (!option) {
@@ -428,7 +436,6 @@ app.post('/create-visitor', async (req, res) => {
 
                 document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
                 await sleep(200);
-                document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
                 document.body.click();
                 await sleep(500);
                 return true;
@@ -438,17 +445,12 @@ app.post('/create-visitor', async (req, res) => {
                 const x = norm(v);
                 if (x === 'female' || x === 'f') return 'Female';
                 if (x === 'male' || x === 'm') return 'Male';
-                if (x === 'other' || x === 'o') return 'Other';
                 return 'Male';
             }
 
             function setDocumentNumber(value) {
                 if (!value) return false;
-                const selectors = [
-                    'input[name="documentNumber"]',
-                    'input[placeholder="Enter document number"]',
-                    'input[inputmode="text"][maxlength="25"]'
-                ];
+                const selectors = ['input[name="documentNumber"]', 'input[placeholder="Enter document number"]', 'input[inputmode="text"][maxlength="25"]'];
                 for (const selector of selectors) {
                     const el = document.querySelector(selector);
                     if (el) return fireReactInput(el, value);
@@ -456,69 +458,39 @@ app.post('/create-visitor', async (req, res) => {
                 return false;
             }
 
-            // --- Form Field Mapping & Async Execution ---
-            const map = {
-                roomNumber: g.room_number || g.roomNumber,
-                checkInDateTime: g.checkInDateTime,
-                checkOutDateTime: g.checkOutDateTime,
-                comingLocation: g.coming_from || g.districtcd || g.comingLocation,
-                goingLocation: g.going_to || g.goingLocation,
-                note: g.note || '',
-                name: g.full_name || g.name || g.guest_name || g.person_name,
-                mobileNumber: g.mobile_number || g.mobileNumber || g.mobile,
-                email: g.email || '',
-                dateOfBirth: g.dateOfBirth || g.dob || '',
-                address: g.address || ''
-            };
+            // Fill Simple Text Inputs
+            setInputByName('roomNumber', g.room_number || g.roomNumber);
+            setInputByName('comingLocation', g.coming_from || g.comingLocation);
+            setInputByName('goingLocation', g.going_to || g.goingLocation);
+            setInputByName('name', g.full_name || g.name);
+            setInputByName('mobileNumber', g.mobile_number || g.mobile);
+            setInputByName('address', g.address || '');
 
-            Object.entries(map).forEach(([n, v]) => setInputByName(n, v));
-
-            // Select Dropdowns with Server-Side Dynamic Response Delays
-            await selectComboByIndex(0, g.visit_reason || g.visitReasonType || 'Tourism');
+            // Dynamic Server Side Dropdowns
+            await selectComboByIndex(0, g.visit_reason || 'Tourism');
             await selectComboByIndex(1, getGender(g.gender));
             await selectComboByIndex(2, g.nationality || 'INDIA');
             await sleep(800);
 
-            // State Selection (Triggers District loading on Server)
-            await selectComboByIndex(3, g.stateCd || g.state || 'Rajasthan');
-            await sleep(1200); // Server call wait
+            // State (Server call for District)
+            await selectComboByIndex(3, g.state || 'Rajasthan');
+            await sleep(1200);
 
-            // District Selection
-            await selectComboByIndex(4, g.districtcd || g.district || 'Jaipur');
-            await selectComboByIndex(6, g.document_type || g.documentType || g.id_type || 'Aadhaar Card');
+            // District & Doc Type
+            await selectComboByIndex(4, g.district || 'Jaipur');
+            await selectComboByIndex(6, g.document_type || 'Aadhaar Card');
 
-            const docType = g.document_type || g.documentType || '';
-            if (docType !== 'Aadhaar Card') {
+            if ((g.document_type || '') !== 'Aadhaar Card') {
                 await sleep(800);
-                await setDocumentNumber(g.document_number || g.documentNumber || g.person_id);
+                await setDocumentNumber(g.document_number);
                 await sleep(800);
             }
-
         }, visitor_data);
 
-        // 7. Document Image Download & Upload Handler
-        const imageUrl = visitor_data.document_url || visitor_data.document_path;
-        if (imageUrl) {
-            console.log('Processing Document File Upload...');
-            if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
-                tempDocPath = path.join('/tmp', `doc_${Date.now()}.jpg`);
-                await downloadImage(imageUrl, tempDocPath);
-            } else {
-                tempDocPath = imageUrl;
-            }
-
-            if (fs.existsSync(tempDocPath)) {
-                const fileInput = await page.$('input[type="file"]');
-                if (fileInput) {
-                    await fileInput.uploadFile(tempDocPath);
-                    console.log('File successfully uploaded into input.');
-                    await new Promise(r => setTimeout(r, 1000));
-                }
-            }
-        }
-
-        // 8. 'Add' Button Par Click Karein
-        console.log('Clicking Add Button...');
+        // -------------------------------------------------------------
+        // STEP 7: Add & Submit
+        // -------------------------------------------------------------
+        console.log('Clicking Add...');
         await page.evaluate(() => {
             const buttons = Array.from(document.querySelectorAll('button'));
             const addBtn = buttons.find(b => b.textContent.trim() === 'Add');
@@ -526,21 +498,17 @@ app.post('/create-visitor', async (req, res) => {
         });
         await new Promise(r => setTimeout(r, 1500));
 
-        // 9. 'Submit Check-In' / 'Submit' Button Par Click Karein
-        console.log('Submitting Final Check-In...');
+        console.log('Submitting...');
         await page.evaluate(() => {
             const buttons = Array.from(document.querySelectorAll('button'));
-            const submitBtn = buttons.find(b => {
-                const txt = b.textContent.trim();
-                return txt.includes('Submit Check-In') || txt === 'Submit';
-            });
+            const submitBtn = buttons.find(b => b.textContent.trim().includes('Submit Check-In') || b.textContent.trim() === 'Submit');
             if (submitBtn) submitBtn.click();
         });
 
-        // 10. Toast Notification Response Capture Karein
+        // Toast capture
         let toastData = { success: false, message: '' };
         try {
-            await page.waitForSelector('.Toastify__toast', { timeout: 10000 });
+            await page.waitForSelector('.Toastify__toast', { timeout: 8000 });
             toastData = await page.evaluate(() => {
                 const toastEl = document.querySelector('.Toastify__toast');
                 if (!toastEl) return { success: false, message: '' };
@@ -549,37 +517,20 @@ app.post('/create-visitor', async (req, res) => {
                 const isSuccessText = text.toLowerCase().includes('success') || text.toLowerCase().includes('saved');
                 return { success: isSuccessClass || isSuccessText, message: text };
             });
-        } catch (e) {
-            console.log('Toast capture timeout or toast absent.');
-        }
-
-        // Temporary Download File Cleanup
-        if (tempDocPath && fs.existsSync(tempDocPath) && tempDocPath.startsWith('/tmp')) {
-            fs.unlinkSync(tempDocPath);
-        }
+        } catch (e) {}
 
         await browser.close();
 
-        if (toastData.success) {
-            return res.json({
-                status: 'success',
-                message: toastData.message || 'Visitor check-in created successfully!'
-            });
-        } else {
-            return res.status(400).json({
-                status: 'failed',
-                message: toastData.message || 'Form submit command execute hui, par portal se success confirmation nahi mila.'
-            });
-        }
+        return res.json({
+            status: toastData.success ? 'success' : 'failed',
+            message: toastData.message || 'Form submitted'
+        });
 
     } catch (error) {
-        if (tempDocPath && fs.existsSync(tempDocPath) && tempDocPath.startsWith('/tmp')) {
-            try { fs.unlinkSync(tempDocPath); } catch (e) {}
-        }
         if (browser) await browser.close();
         return res.status(500).json({
             status: 'error',
-            message: 'Automation Exception: ' + error.message
+            message: 'Automation Error: ' + error.message
         });
     }
 });
