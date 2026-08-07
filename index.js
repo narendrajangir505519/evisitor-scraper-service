@@ -122,6 +122,7 @@ app.post('/login-evisitor', async (req, res) => {
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
                 '--disable-gpu',
+                '--single-process',
             ],
             defaultViewport: { width: 1280, height: 800 },
             executablePath: await chromium.executablePath(),
@@ -288,7 +289,8 @@ app.post('/create-visitor', async (req, res) => {
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage', // Memory crash fix
                 '--disable-gpu',
-                '--no-zygote'
+                '--no-zygote',
+                '--single-process',
             ],
             defaultViewport: { width: 1280, height: 800 },
             executablePath: await chromium.executablePath(),
