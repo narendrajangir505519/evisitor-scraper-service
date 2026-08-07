@@ -233,9 +233,31 @@ app.post('/login-evisitor', async (req, res) => {
 
         const nextPageHtml = await page.content();
         // const cookies = await page.cookies();
+        // ⭐ TAREOKA 1: CDP Session Se Browser Ki SABHI Domains Ki Cookies Fetch Karein
         const client = await page.target().createCDPSession();
-const cookiesResult = await client.send('Network.getAllCookies');
-const cookies = cookiesResult.cookies;
+        const cdpCookies = await client.send('Network.getAllCookies');
+        const allCookies = cdpCookies.cookies || [];
+
+        // ⭐ TAREOKA 2: LocalStorage Aur SessionStorage Ka Data Nikalein
+        const authStorage = await page.evaluate(() => {
+            let localData = {};
+            let sessionData = {};
+
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                localData[key] = localStorage.getItem(key);
+            }
+
+            for (let i = 0; i < sessionStorage.length; i++) {
+                const key = sessionStorage.key(i);
+                sessionData[key] = sessionStorage.getItem(key);
+            }
+
+            return {
+                localStorage: localData,
+                sessionStorage: sessionData
+            };
+        });
 
         await browser.close();
 
@@ -243,7 +265,8 @@ const cookies = cookiesResult.cookies;
             status: 'success',
             toast_message: toastData.message || 'Login Successful',
             captcha_used: captchaCode,
-            cookies: cookies,
+            cookies: allCookies,
+            auth_storage: authStorage,
             next_page_html: nextPageHtml
         });
 
