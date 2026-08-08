@@ -599,12 +599,12 @@ app.post('/create-visitor', async (req, res) => {
                 }
 
                 if (g.state || g.stateCd) {
-                    await selectComboByTarget('state', 3, g.state || g.stateCd);
+                    await selectComboByTarget('state', 3, g.stateCd);
                     await sleep(2000); // 2 Seconds exact wait so that District has time to API load
                 }
 
                 if (g.district || g.districtcd) {
-                    await selectComboByTarget('district', 4, g.district || g.districtcd);
+                    await selectComboByTarget('district', 4, g.districtcd);
                     await sleep(1500);
                 }
 
