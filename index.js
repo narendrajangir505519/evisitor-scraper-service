@@ -431,10 +431,7 @@ app.post('/create-visitor', async (req, res) => {
             }
 
             // Fill inputs only if payload has values
-            if (bData.check_in_date_time) {
-                const formattedTime = formatDateTimeLocal(bData.check_in_date_time);
-                setInputByName('checkInDateTime', bData.check_in_date_time);
-            }
+            if (bData.check_in_date_time)setInputByName('checkInDateTime', bData.check_in_date_time);
             if (bData.room_number) setInputByName('roomNumber', bData.room_number);
             if (bData.coming_from) setInputByName('comingLocation', bData.coming_from);
             if (bData.going_to) setInputByName('goingLocation', bData.going_to);
