@@ -764,7 +764,7 @@ app.post('/create-visitor', async (req, res) => {
         
         return res.status(400).json({ 
             status: 'failed', 
-            message: error.message,
+            message: error.message +' || '+ new Date().toString(),
             // JSON ME BASE64 IMAGE BHEJ RAHE HAI
             error_screenshot: errorScreenshotBase64 ? `data:image/png;base64,${errorScreenshotBase64}` : null 
         });
