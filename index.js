@@ -589,7 +589,7 @@ app.post('/create-visitor', async (req, res) => {
                 }
 
                 if (g.state || g.stateCd) {
-                    await selectComboByTarget('state', 3, g.state || g.stateCd);
+                    await selectComboByTarget('stateCd', 3, g.state || g.stateCd);
                     await sleep(1500); 
                 }
 
