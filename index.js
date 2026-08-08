@@ -259,7 +259,6 @@ app.post('/create-visitor', async (req, res) => {
     const { auth_storage, booking_data } = req.body;
     const visitorsUrl = 'https://evisitor.rajasthan.gov.in/evisitor/user/visitors';
     
-    // VARIABLES MOVED TO OUTER SCOPE FOR SCREENSHOT ACCESS
     let browser = null;
     let page = null; 
     let tempFiles = [];
@@ -280,7 +279,7 @@ app.post('/create-visitor', async (req, res) => {
             headless: true,
         });
 
-        page = await browser.newPage(); // Assigned page here
+        page = await browser.newPage();
 
         await page.goto('https://evisitor.rajasthan.gov.in/evisitor', { waitUntil: 'domcontentloaded' });
         if (auth_storage) {
@@ -358,45 +357,35 @@ app.post('/create-visitor', async (req, res) => {
                 combo.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
                 combo.click();
 
-                let options = [];
+                let targetOption = null;
                 const need = norm(optionText);
 
-                for (let attempt = 0; attempt < 10; attempt++) {
+                for (let attempt = 0; attempt < 15; attempt++) {
                     await sleep(300);
-                    options = Array.from(document.querySelectorAll('li[role="option"]')).filter(o => {
+                    const options = Array.from(document.querySelectorAll('li[role="option"]')).filter(o => {
                         const rect = o.getBoundingClientRect();
-                        const isVisible = rect.width > 0 && rect.height > 0;
-                        const t = (o.innerText || o.textContent || '').replace(/\u200B/g, '').trim();
-                        return isVisible && t !== '';
+                        return rect.width > 0 && rect.height > 0;
                     });
-                    if (options.length > 0) break;
+
+                    targetOption = options.find(o => {
+                        const text = norm(o.innerText || o.textContent);
+                        return text === need || text.includes(need);
+                    });
+
+                    if (targetOption) break;
                 }
 
-                if (options.length === 0) {
-                    document.body.click();
-                    await sleep(300);
-                    return false;
+                if (targetOption) {
+                    targetOption.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    await sleep(200);
+                    targetOption.click();
+                    await sleep(500);
+                    return true;
                 }
 
-                const option = options.find(o => {
-                    const text = norm(o.innerText || o.textContent);
-                    if (text === need) return true;
-                    return text.includes(need);
-                });
-
-                if (!option) {
-                    document.body.click();
-                    await sleep(300);
-                    return false;
-                }
-
-                option.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                await sleep(200);
-                option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-                option.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-                option.click();
-                await sleep(500);
-                return true;
+                document.body.click();
+                await sleep(300);
+                return false;
             }
 
             if (bData.check_in_date_time) setInputByName('checkInDateTime', bData.check_in_date_time);
@@ -497,7 +486,7 @@ app.post('/create-visitor', async (req, res) => {
 
                     if (!combo) return false;
 
-                    for (let attempt = 0; attempt < 20; attempt++) { 
+                    for (let attempt = 0; attempt < 30; attempt++) { 
                         const isMuiDisabled = combo.classList.contains('Mui-disabled') || (combo.closest('.Mui-disabled') !== null);
                         const isDisabled = combo.hasAttribute('disabled') || combo.getAttribute('aria-disabled') === 'true';
                         
@@ -528,40 +517,43 @@ app.post('/create-visitor', async (req, res) => {
                     combo.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
                     combo.click();
 
-                    let option = null;
+                    let targetOption = null;
 
-                    for (let attempt = 0; attempt < 30; attempt++) { 
-                        await sleep(500);
+                    for (let attempt = 0; attempt < 35; attempt++) { 
+                        await sleep(400);
                         
                         const options = Array.from(document.querySelectorAll('li[role="option"]')).filter(o => {
                             const rect = o.getBoundingClientRect();
                             return rect.width > 0 && rect.height > 0;
                         });
 
-                        option = options.find(o => {
-                            const text = norm(o.innerText || o.textContent);
-                            return text === need || text.startsWith(need + ' ') || text.endsWith(' ' + need) || text.includes(' ' + need + ' ');
-                        });
+                        if (options.length > 0) {
+                            targetOption = options.find(o => {
+                                const text = norm(o.innerText || o.textContent);
+                                return text === need || text.startsWith(need + ' ') || text.endsWith(' ' + need) || text.includes(' ' + need + ' ');
+                            });
 
-                        if (!option) {
-                            option = options.find(o => norm(o.innerText || o.textContent).includes(need));
+                            if (!targetOption) {
+                                targetOption = options.find(o => norm(o.innerText || o.textContent).includes(need));
+                            }
+
+                            if (targetOption) {
+                                break; 
+                            }
                         }
 
-                        if (option) {
-                            break; 
-                        }
-
-                        if (attempt === 10 || attempt === 20) {
+                        if (attempt === 12 || attempt === 22) {
+                            document.body.click();
+                            await sleep(300);
+                            combo.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
                             combo.click();
                         }
                     }
 
-                    if (option) {
-                        option.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    if (targetOption) {
+                        targetOption.scrollIntoView({ behavior: 'smooth', block: 'center' });
                         await sleep(200);
-                        option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-                        option.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-                        option.click();
+                        targetOption.click();
                         await sleep(400);
                     } else if (combo.tagName === 'INPUT') {
                         const firstOption = document.querySelector('li[role="option"]');
@@ -582,7 +574,7 @@ app.post('/create-visitor', async (req, res) => {
                         await sleep(200);
                     }
 
-                    return !!option; 
+                    return !!targetOption; 
                 }
 
                 setInputByName('name', g.full_name || g.name || g.guest_name);
@@ -594,19 +586,19 @@ app.post('/create-visitor', async (req, res) => {
                     await sleep(500);
                 }
 
-                // if (g.nationality) {
-                //     await selectComboByTarget('nationality', 2, g.nationality);
-                //     await sleep(1000);
-                // }
+                if (g.nationality) {
+                    await selectComboByTarget('nationality', 2, g.nationality);
+                    await sleep(500);
+                }
 
                 if (g.state || g.stateCd) {
                     await selectComboByTarget('state', 3, g.state || g.stateCd);
-                    await sleep(1000); 
+                    await sleep(1500); 
                 }
 
                 if (g.district || g.districtcd) {
                     await selectComboByTarget('district', 4, g.district || g.districtcd);
-                    await sleep(500);
+                    await sleep(800);
                 }
 
                 const docType = g.document_type || g.documentType || g.id_type || g.type || '';
@@ -625,11 +617,6 @@ app.post('/create-visitor', async (req, res) => {
                         setDocumentNumber(docNum);
                         await sleep(1000);
                     }
-                }
-
-                if (g.district || g.districtcd) {
-                    await selectComboByTarget('district', 4, g.district || g.districtcd);
-                    await sleep(500);
                 }
 
                 return { success: true };
@@ -717,7 +704,6 @@ app.post('/create-visitor', async (req, res) => {
             });
 
             if (!addResult.success) {
-                // YE ERROR THROW HOGA TOH CATCH BLOCK ME JAYEGA AUR SCREENSHOT LEGA
                 throw new Error(`Guest ${i + 1} (${guest.full_name || 'Guest'}) Add nahi ho paya: ${addResult.error}`);
             }
         }
@@ -744,16 +730,13 @@ app.post('/create-visitor', async (req, res) => {
         return res.json({ status: 'success', message: toastMessage });
 
     } catch (error) {
-        // ERROR AANE PAR YAHAN AAYEGA
         tempFiles.forEach(f => { try { fs.unlinkSync(f); } catch (e) {} });
         
         let errorScreenshotBase64 = null;
         
-        // BROWSER CLOSE HONE SE PEHLE SCREENSHOT LENA
         if (page && !page.isClosed()) {
             try {
                 console.log('Error aaya, screenshot capture kar rahe hain...');
-                // fullPage true rakha hai taaki poora error form dikhe
                 errorScreenshotBase64 = await page.screenshot({ encoding: 'base64', fullPage: true }); 
             } catch (screenshotError) {
                 console.error("Screenshot capture failed:", screenshotError);
@@ -765,7 +748,6 @@ app.post('/create-visitor', async (req, res) => {
         return res.status(400).json({ 
             status: 'failed', 
             message: error.message,
-            // JSON ME BASE64 IMAGE BHEJ RAHE HAI
             error_screenshot: errorScreenshotBase64 ? `data:image/png;base64,${errorScreenshotBase64}` : null 
         });
     }
