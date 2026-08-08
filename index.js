@@ -348,64 +348,73 @@ app.post('/create-visitor', async (req, res) => {
         // 4. Booking Level Fields
         console.log('Filling Booking Level Details...');
         const bookingFillResult = await page.evaluate(async (bData) => {
-            function safeSetInputValue(el, value) {
+            const isVisible = el => el && el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0 && window.getComputedStyle(el).visibility !== 'hidden';
+            
+            function safeSetInputValue(selector, value) {
+                const el = Array.from(document.querySelectorAll(selector)).find(isVisible) || document.querySelector(selector);
                 if (!el) return false;
                 const val = value ?? '';
                 try {
-                    const proto = Object.getPrototypeOf(el);
-                    const descriptor = Object.getOwnPropertyDescriptor(proto, 'value') ||
-                                       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value') ||
-                                       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
-                    
-                    if (descriptor && descriptor.set) {
-                        descriptor.set.call(el, val);
-                    } else {
-                        el.value = val;
-                    }
-                } catch (e) {
-                    el.value = val;
-                }
-                el.dispatchEvent(new Event('input', { bubbles: true }));
+                    const desc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value') || Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+                    if (desc && desc.set) desc.set.call(el, val); else el.value = val;
+                } catch (e) { el.value = val; }
+                el.dispatchEvent(new Event('input', { bubbles: true })); 
                 el.dispatchEvent(new Event('change', { bubbles: true }));
                 el.dispatchEvent(new Event('blur', { bubbles: true }));
                 return true;
             }
 
-            function setInputByName(name, value) {
-                const el = document.querySelector(`[name="${name}"]`);
-                return el ? safeSetInputValue(el, value) : false;
+            // HTML5 input[type="datetime-local"] ke liye strict format generator (YYYY-MM-DDTHH:mm)
+            function toDateTimeLocalString(d) {
+                const pad = n => String(n).padStart(2, '0');
+                return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
             }
 
             try {
-                let checkInTime = bData.check_in_date_time;
-                if (checkInTime) {
-                    let formatted = String(checkInTime).trim().replace(' ', 'T');
-                    let parsedDate = new Date(formatted);
-                    safeTime = parsedDate;
-                }
-                setInputByName('checkInDateTime', safeTime);
-                setInputByName('roomNumber', bData.room_number || '101');
-                setInputByName('comingLocation', bData.coming_from || 'Sikar');
-                setInputByName('goingLocation', bData.going_to || 'Sikar');
+                let dateObj = null;
 
-                const combo = document.querySelectorAll('[role="combobox"]')[0];
-                if (combo) {
-                    combo.click();
-                    await new Promise(r => setTimeout(r, 400));
-                    const options = Array.from(document.querySelectorAll('li[role="option"], div[role="option"]'));
-                    const targetReason = String(bData.visit_reason || '').toLowerCase();
-                    const opt = options.find(o => o.textContent.toLowerCase().includes(targetReason)) || options[0];
-                    if (opt) opt.click();
+                if (bData.check_in_date_time) {
+                    let cleanStr = String(bData.check_in_date_time).trim().replace(' ', 'T');
+                    let parsed = new Date(cleanStr);
+                    if (!isNaN(parsed.getTime())) {
+                        dateObj = parsed;
+                    }
                 }
-                return { success: true };
+
+                // Strictly formatted string ("2026-08-08T00:29")
+                const safeTimeStr = toDateTimeLocalString(dateObj);
+
+                // Set Value in DateTime Inputs
+                safeSetInputValue('input[name="checkInDateTime"]', safeTimeStr);
+                safeSetInputValue('input[name="checkInDate"]', safeTimeStr);
+                safeSetInputValue('input[type="datetime-local"]', safeTimeStr);
+
+                // Other Booking Fields
+                safeSetInputValue('input[name="roomNumber"]', bData.room_number || '101');
+                safeSetInputValue('input[name="comingLocation"]', bData.coming_from || 'Sikar');
+                safeSetInputValue('input[name="goingLocation"]', bData.going_to || 'Sikar');
+
+                // Visit Reason Dropdown
+                const combos = Array.from(document.querySelectorAll('[role="combobox"]')).filter(isVisible);
+                if (combos.length > 0) {
+                    combos[0].dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                    combos[0].click();
+                    await new Promise(r => setTimeout(r, 500));
+                    const options = Array.from(document.querySelectorAll('li[role="option"], div[role="option"]')).filter(isVisible);
+                    const targetReason = String(bData.visit_reason || '').toLowerCase();
+                    const opt = options.find(o => (o.innerText || o.textContent).toLowerCase().includes(targetReason)) || options[0];
+                    if (opt) { 
+                        opt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); 
+                        opt.click(); 
+                    }
+                }
+                return { success: true, filled_time: safeTimeStr };
             } catch (err) {
                 return { success: false, field: 'Booking Base Fields', error: err.message };
             }
         }, booking_data);
 
-        if (!bookingFillResult.success) {
-            throw new Error(`Error at ${bookingFillResult.field}: ${bookingFillResult.error}`);
-        }
+        if (!bookingFillResult.success) throw new Error(`Error at ${bookingFillResult.field}: ${bookingFillResult.error}`);
 
         // 5. Guests Loop
         const guests = booking_data.guests || [];
