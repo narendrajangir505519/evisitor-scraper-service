@@ -745,6 +745,28 @@ app.post('/create-visitor', async (req, res) => {
         return res.json({ status: 'success', message: toastMessage });
 
     } catch (error) {
+        let screenshotBase64 = null;
+
+        // Error aane par current page ka full screenshot lena
+        if (page && !page.isClosed()) {
+            try {
+                const screenshotBuffer = await page.screenshot({ fullPage: true, type: 'jpeg', quality: 60 });
+                screenshotBase64 = screenshotBuffer.toString('base64');
+            } catch (ssErr) {
+                console.error('Screenshot Capture Failed:', ssErr.message);
+            }
+        }
+
+        if (browser) await browser.close();
+
+        // Screenshot base64 string ke sath error response bhejna
+        return res.status(400).json({
+            status: 'failed',
+            message: error.message,
+            screenshot: screenshotBase64
+        });
+
+        
         tempFiles.forEach(f => { try { fs.unlinkSync(f); } catch (e) {} });
         if (browser) await browser.close();
         return res.status(400).json({ status: 'failed', message: error.message });
