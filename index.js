@@ -588,13 +588,13 @@ app.post('/create-visitor', async (req, res) => {
                 // 1. Gender (Combo 1)
                 if (g.gender) {
                     await selectComboByIndex(1, getGender(g.gender));
-                    await sleep(400);
+                    await sleep(1000);
                 }
 
                 // 2. Nationality (Combo 2)
                 if (g.nationality) {
                     await selectComboByIndex(2, g.nationality);
-                    await sleep(800);
+                    await sleep(1000);
                 }
 
                 // 3. State (Combo 3)
@@ -606,7 +606,7 @@ app.post('/create-visitor', async (req, res) => {
                 // 4. District (Combo 4)
                 if (g.district || g.districtcd) {
                     await selectComboByIndex(4, g.district || g.districtcd);
-                    await sleep(500);
+                    await sleep(1500);
                 }
 
                 // 5. Document Type (Combo 6)
@@ -745,28 +745,6 @@ app.post('/create-visitor', async (req, res) => {
         return res.json({ status: 'success', message: toastMessage });
 
     } catch (error) {
-        let screenshotBase64 = null;
-
-        // Error aane par current page ka full screenshot lena
-        if (page && !page.isClosed()) {
-            try {
-                const screenshotBuffer = await page.screenshot({ fullPage: true, type: 'jpeg', quality: 60 });
-                screenshotBase64 = screenshotBuffer.toString('base64');
-            } catch (ssErr) {
-                console.error('Screenshot Capture Failed:', ssErr.message);
-            }
-        }
-
-        if (browser) await browser.close();
-
-        // Screenshot base64 string ke sath error response bhejna
-        return res.status(400).json({
-            status: 'failed',
-            message: error.message,
-            screenshot: screenshotBase64
-        });
-
-        
         tempFiles.forEach(f => { try { fs.unlinkSync(f); } catch (e) {} });
         if (browser) await browser.close();
         return res.status(400).json({ status: 'failed', message: error.message });
