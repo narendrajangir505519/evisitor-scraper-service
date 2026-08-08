@@ -4,9 +4,16 @@ const chromium = require('@sparticuz/chromium');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios'); // File download karne ke liye (npm install axios)
+const https = require('https');
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
+
+// Custom Axios instance to reliably download document images
+const axiosInstance = axios.create({
+    httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+    timeout: 20000
+});
 
 const PORT = process.env.PORT || 3000;
 
@@ -18,17 +25,25 @@ app.get('/', (req, res) => {
 // Helper function: Document Image Download karne ke liye
 async function downloadImage(url, destPath) {
     if (!url) return false;
-    const writer = fs.createWriteStream(destPath);
-    const response = await axios({
-        url,
-        method: 'GET',
-        responseType: 'stream'
-    });
-    response.data.pipe(writer);
-    return new Promise((resolve, reject) => {
-        writer.on('finish', () => resolve(true));
-        writer.on('error', reject);
-    });
+    try {
+        const writer = fs.createWriteStream(destPath);
+        const response = await axiosInstance({
+            url,
+            method: 'GET',
+            responseType: 'stream'
+        });
+        response.data.pipe(writer);
+        return new Promise((resolve, reject) => {
+            writer.on('finish', () => resolve(true));
+            writer.on('error', (err) => {
+                writer.close();
+                reject(err);
+            });
+        });
+    } catch (err) {
+        console.error('Image Download Failed:', err.message);
+        return false;
+    }
 }
 
 // Main Automation & Scraper Endpoint
@@ -300,7 +315,7 @@ app.post('/create-visitor', async (req, res) => {
 
         const page = await browser.newPage();
 
-        // 1. Session Setup
+        // 1. Restore Auth Storage
         await page.goto('https://evisitor.rajasthan.gov.in/evisitor', { waitUntil: 'domcontentloaded' });
         if (auth_storage) {
             await page.evaluate((storage) => {
@@ -321,7 +336,7 @@ app.post('/create-visitor', async (req, res) => {
             throw new Error('Session expire ho gaya hai ya invalid auth data hai.');
         }
 
-        // 3. Open Modal
+        // 3. Open Visitor Modal
         const createBtnClicked = await page.evaluate(() => {
             const buttons = Array.from(document.querySelectorAll('button'));
             const targetBtn = buttons.find(b => {
@@ -341,14 +356,11 @@ app.post('/create-visitor', async (req, res) => {
 
         await new Promise(r => setTimeout(r, 2000));
 
-        // 4. Fill Booking Base Fields (No hardcoded defaults)
-        console.log('Filling Booking Base Details...');
+        // 4. Fill Booking Level Details (No Hardcoded Defaults)
+        console.log('Filling Booking Level Details...');
         const baseResult = await page.evaluate(async (bData) => {
-            function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-            
-            function norm(v) {
-                return String(v || '').replace(/\u200B/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
-            }
+            const sleep = ms => new Promise(r => setTimeout(r, ms));
+            const norm = v => String(v || '').replace(/\u200B/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
 
             function fireReactInput(el, value) {
                 if (!el) return false;
@@ -372,15 +384,6 @@ app.post('/create-visitor', async (req, res) => {
                 return el ? fireReactInput(el, value) : false;
             }
 
-            function formatDateTimeLocal(dtStr) {
-                if (!dtStr) return '';
-                let clean = String(dtStr).trim().replace(' ', 'T');
-                let d = new Date(clean);
-                if (isNaN(d.getTime())) return clean;
-                const pad = n => String(n).padStart(2, '0');
-                return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-            }
-
             async function selectComboByIndex(index, optionText) {
                 if (!optionText) return false;
                 const combos = Array.from(document.querySelectorAll('[role="combobox"]'));
@@ -391,14 +394,25 @@ app.post('/create-visitor', async (req, res) => {
                 await sleep(300);
                 combo.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
                 combo.click();
-                await sleep(500);
 
-                const options = Array.from(document.querySelectorAll('li[role="option"][tabindex="-1"], li[role="option"]')).filter(o => {
-                    const t = (o.innerText || o.textContent || '').replace(/\u200B/g, '').trim();
-                    return t !== '';
-                });
-
+                let options = [];
                 const need = norm(optionText);
+
+                for (let attempt = 0; attempt < 10; attempt++) {
+                    await sleep(300);
+                    options = Array.from(document.querySelectorAll('li[role="option"][tabindex="-1"], li[role="option"]')).filter(o => {
+                        const t = (o.innerText || o.textContent || '').replace(/\u200B/g, '').trim();
+                        return t !== '';
+                    });
+                    if (options.length > 0) break;
+                }
+
+                if (options.length === 0) {
+                    document.body.click();
+                    await sleep(300);
+                    return false;
+                }
+
                 const option = options.find(o => {
                     const text = norm(o.innerText || o.textContent);
                     if (text === need) return true;
@@ -430,13 +444,11 @@ app.post('/create-visitor', async (req, res) => {
                 return true;
             }
 
-            // Fill inputs only if payload has values
-            if (bData.check_in_date_time)setInputByName('checkInDateTime', bData.check_in_date_time);
+            if (bData.check_in_date_time) setInputByName('checkInDateTime', bData.check_in_date_time);
             if (bData.room_number) setInputByName('roomNumber', bData.room_number);
             if (bData.coming_from) setInputByName('comingLocation', bData.coming_from);
             if (bData.going_to) setInputByName('goingLocation', bData.going_to);
 
-            // Visit Reason (Combo Index 0)
             if (bData.visit_reason) {
                 await selectComboByIndex(0, bData.visit_reason);
             }
@@ -445,23 +457,20 @@ app.post('/create-visitor', async (req, res) => {
         }, booking_data);
 
         if (!baseResult.success) {
-            throw new Error('Base booking details fill nahi ho paaye.');
+            throw new Error('Booking base level fields fill nahi ho sake.');
         }
 
-        // 5. Guests Processing
+        // 5. Guests Loop
         const guests = booking_data.guests || [];
-        console.log(`Processing ${guests.length} guests...`);
+        console.log(`Processing ${guests.length} guest(s)...`);
 
         for (let i = 0; i < guests.length; i++) {
             const guest = guests[i];
-            console.log(`Filling Guest ${i + 1}: ${guest.full_name}`);
+            console.log(`Filling Guest ${i + 1}: ${guest.full_name || 'Guest'}`);
 
-            const guestResult = await page.evaluate(async (g) => {
-                function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-                function norm(v) {
-                    return String(v || '').replace(/\u200B/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
-                }
+            const guestFillResult = await page.evaluate(async (g) => {
+                const sleep = ms => new Promise(r => setTimeout(r, ms));
+                const norm = v => String(v || '').replace(/\u200B/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
 
                 function fireReactInput(el, value) {
                     if (!el) return false;
@@ -491,7 +500,8 @@ app.post('/create-visitor', async (req, res) => {
                         'input[name="documentNumber"]',
                         'input[placeholder="Enter document number"]',
                         'input[placeholder="Enter Document Number"]',
-                        'input[inputmode="text"][maxlength="25"]'
+                        'input[inputmode="text"][maxlength="25"]',
+                        'input[name="idNumber"]'
                     ];
                     for (const selector of selectors) {
                         const el = document.querySelector(selector);
@@ -518,14 +528,26 @@ app.post('/create-visitor', async (req, res) => {
                     await sleep(300);
                     combo.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
                     combo.click();
-                    await sleep(500);
 
-                    const options = Array.from(document.querySelectorAll('li[role="option"][tabindex="-1"], li[role="option"]')).filter(o => {
-                        const t = (o.innerText || o.textContent || '').replace(/\u200B/g, '').trim();
-                        return t !== '';
-                    });
-
+                    let options = [];
                     const need = norm(optionText);
+
+                    // Dynamic Wait Loop for Options (Crucial for State -> District Dependency)
+                    for (let attempt = 0; attempt < 12; attempt++) {
+                        await sleep(300);
+                        options = Array.from(document.querySelectorAll('li[role="option"][tabindex="-1"], li[role="option"]')).filter(o => {
+                            const t = (o.innerText || o.textContent || '').replace(/\u200B/g, '').trim();
+                            return t !== '';
+                        });
+                        if (options.length > 0) break;
+                    }
+
+                    if (options.length === 0) {
+                        document.body.click();
+                        await sleep(300);
+                        return false;
+                    }
+
                     const option = options.find(o => {
                         const text = norm(o.innerText || o.textContent);
                         if (text === need) return true;
@@ -557,63 +579,86 @@ app.post('/create-visitor', async (req, res) => {
                     return true;
                 }
 
-                // Extension mapping sequence
-                setInputByName('name', g.full_name);
-                setInputByName('mobileNumber', g.mobile_number);
+                // Extension Exact Field Map
+                setInputByName('name', g.full_name || g.name);
+                setInputByName('mobileNumber', g.mobile_number || g.mobile);
                 setInputByName('address', g.address);
 
-                // Combobox selections matching Extension indexes:
-                // 1: Gender, 2: Nationality, 3: State, 4: District, 6: Document Type
-                if (g.gender) await selectComboByIndex(1, getGender(g.gender));
-                if (g.nationality) await selectComboByIndex(2, g.nationality);
-                await sleep(1000);
-
-                if (g.state) await selectComboByIndex(3, g.state);
-                await sleep(1000);
-
-                if (g.district) await selectComboByIndex(4, g.district);
-
-                if (g.document_type) {
-                    let docSuccess = await selectComboByIndex(6, g.document_type);
-                    if (!docSuccess) {
-                        await selectComboByIndex(5, g.document_type);
-                    }
+                // 1. Gender (Combo 1)
+                if (g.gender) {
+                    await selectComboByIndex(1, getGender(g.gender));
+                    await sleep(400);
                 }
 
-                if (g.document_number) {
-                    setDocumentNumber(g.document_number);
+                // 2. Nationality (Combo 2)
+                if (g.nationality) {
+                    await selectComboByIndex(2, g.nationality);
+                    await sleep(800);
+                }
+
+                // 3. State (Combo 3)
+                if (g.state) {
+                    await selectComboByIndex(3, g.state);
+                    await sleep(1500); // State set hone ke baad District options fetch hone ka time
+                }
+
+                // 4. District (Combo 4)
+                if (g.district) {
+                    await selectComboByIndex(4, g.district);
+                    await sleep(500);
+                }
+
+                // 5. Document Type (Combo 6)
+                if (g.document_type || g.documentType) {
+                    const dType = g.document_type || g.documentType;
+                    let success = await selectComboByIndex(6, dType);
+                    if (!success) {
+                        await selectComboByIndex(5, dType);
+                    }
+                    await sleep(1000); // React input mount duration
+                }
+
+                // 6. Document Number (Must be filled AFTER Document Type)
+                if (g.document_number || g.documentNumber) {
+                    setDocumentNumber(g.document_number || g.documentNumber);
+                    await sleep(500);
                 }
 
                 return { success: true };
             }, guest);
 
-            if (!guestResult.success) {
-                throw new Error(`Guest ${i + 1} ki basic details set nahi ho payi.`);
+            if (!guestFillResult.success) {
+                throw new Error(`Guest ${i + 1} ki fields fill nahi ho paayi.`);
             }
 
-            // Document File Upload (Only if URL exists)
-            if (guest.document_url && (guest.document_url.startsWith('http://') || guest.document_url.startsWith('https://'))) {
+            // 7. Document Upload (If document URL is provided)
+            const docUrl = guest.document_url || guest.document_path;
+            if (docUrl && typeof docUrl === 'string' && docUrl.startsWith('http')) {
                 const docPath = path.join('/tmp', `doc_${Date.now()}_${i}.jpg`);
                 try {
-                    const downloaded = await downloadImage(guest.document_url, docPath);
-                    if (downloaded && fs.existsSync(docPath)) {
+                    const isDownloaded = await downloadImage(docUrl, docPath);
+                    if (isDownloaded && fs.existsSync(docPath)) {
                         tempFiles.push(docPath);
+
+                        await page.waitForSelector('input[type="file"]', { timeout: 5000 }).catch(() => null);
                         const fileInput = await page.$('input[type="file"]');
+
                         if (fileInput) {
                             await fileInput.uploadFile(docPath);
                             await page.evaluate((el) => {
-                                el.dispatchEvent(new Event('change', { bubbles: true }));
                                 el.dispatchEvent(new Event('input', { bubbles: true }));
+                                el.dispatchEvent(new Event('change', { bubbles: true }));
+                                el.dispatchEvent(new Event('blur', { bubbles: true }));
                             }, fileInput);
-                            await new Promise(r => setTimeout(r, 1000));
+                            await new Promise(r => setTimeout(r, 2000));
                         }
                     }
-                } catch (e) {
-                    console.warn(`Failed to download image for guest ${i + 1}:`, e.message);
+                } catch (err) {
+                    console.warn(`Guest ${i + 1} image upload skip hua:`, err.message);
                 }
             }
 
-            // Click "Add" Button
+            // 8. Click 'Add' Button
             console.log(`Clicking 'Add' button for Guest ${i + 1}...`);
             const addResult = await page.evaluate(async () => {
                 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -635,11 +680,11 @@ app.post('/create-visitor', async (req, res) => {
             });
 
             if (!addResult.success) {
-                throw new Error(`Guest ${i + 1} (${guest.full_name}) Add nahi ho paya: ${addResult.error}`);
+                throw new Error(`Guest ${i + 1} (${guest.full_name || 'Guest'}) Add nahi ho paya: ${addResult.error}`);
             }
         }
 
-        // 6. Final Submit Check-In
+        // 6. Submit Final Check-In
         console.log('Submitting Final Check-In...');
         await page.evaluate(() => {
             const buttons = Array.from(document.querySelectorAll('button'));
@@ -650,7 +695,6 @@ app.post('/create-visitor', async (req, res) => {
             if (submitBtn) submitBtn.click();
         });
 
-        // 7. Toast Message Capture
         let toastMessage = 'Visitor check-in submitted successfully.';
         try {
             await page.waitForSelector('.Toastify__toast', { timeout: 8000 });
@@ -668,7 +712,6 @@ app.post('/create-visitor', async (req, res) => {
         return res.status(400).json({ status: 'failed', message: error.message });
     }
 });
-
 app.listen(PORT, () => {
     console.log(`Server active on port ${PORT}`);
 });
