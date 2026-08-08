@@ -499,21 +499,6 @@ app.post('/create-visitor', async (req, res) => {
                     
                     const need = norm(optionText);
 
-                    if (combo.tagName === 'INPUT') {
-                        combo.focus();
-                        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-                        if (setter) setter.call(combo, ''); else combo.value = '';
-                        combo.dispatchEvent(new Event('input', { bubbles: true }));
-                        await sleep(300);
-                        
-                        if (optionText.length > 2) {
-                            const typeText = optionText.substring(0, 4);
-                            if (setter) setter.call(combo, typeText); else combo.value = typeText;
-                            combo.dispatchEvent(new Event('input', { bubbles: true }));
-                            await sleep(500); 
-                        }
-                    }
-
                     combo.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
                     combo.click();
 
@@ -528,14 +513,26 @@ app.post('/create-visitor', async (req, res) => {
                         });
 
                         if (options.length > 0) {
+                            const needWords = need.split(/\s+/);
+                            const firstNeedWord = needWords[0];
+
+                            // SMART WORD-WISE & PREFIX MATCHING LOGIC
                             targetOption = options.find(o => {
                                 const text = norm(o.innerText || o.textContent);
-                                return text === need || text.startsWith(need + ' ') || text.endsWith(' ' + need) || text.includes(' ' + need + ' ');
-                            });
+                                const textWords = text.split(/\s+/);
+                                const firstTextWord = textWords[0];
 
-                            if (!targetOption) {
-                                targetOption = options.find(o => norm(o.innerText || o.textContent).includes(need));
-                            }
+                                // 1. Exact match
+                                if (text === need) return true;
+                                // 2. Starts with full value
+                                if (text.startsWith(need)) return true;
+                                // 3. Contains full value
+                                if (text.includes(need)) return true;
+                                // 4. First word match (e.g., "jaipur" matches "JAIPUR CITY" or "JAIPUR RURAL")
+                                if (firstTextWord === firstNeedWord && firstNeedWord.length >= 2) return true;
+                                
+                                return false;
+                            });
 
                             if (targetOption) {
                                 break; 
