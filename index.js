@@ -385,14 +385,12 @@ app.post('/create-visitor', async (req, res) => {
                 const safeTimeStr = toDateTimeLocalString(dateObj);
 
                 // Set Value in DateTime Inputs
-                safeSetInputValue('input[name="checkInDateTime"]', safeTimeStr);
-                safeSetInputValue('input[name="checkInDate"]', safeTimeStr);
-                safeSetInputValue('input[type="datetime-local"]', safeTimeStr);
+                safeSetInputValue('input[name="checkInDateTime"]', bData.check_in_date_time);
 
                 // Other Booking Fields
-                safeSetInputValue('input[name="roomNumber"]', bData.room_number || '101');
-                safeSetInputValue('input[name="comingLocation"]', bData.coming_from || 'Sikar');
-                safeSetInputValue('input[name="goingLocation"]', bData.going_to || 'Sikar');
+                safeSetInputValue('input[name="roomNumber"]', bData.room_number || '');
+                safeSetInputValue('input[name="comingLocation"]', bData.coming_from || '');
+                safeSetInputValue('input[name="goingLocation"]', bData.going_to || '');
 
                 // Visit Reason Dropdown
                 const combos = Array.from(document.querySelectorAll('[role="combobox"]')).filter(isVisible);
