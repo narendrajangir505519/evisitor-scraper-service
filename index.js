@@ -600,12 +600,12 @@ app.post('/create-visitor', async (req, res) => {
                 // }
 
                 if (g.state || g.stateCd) {
-                    await selectComboByTarget('state', 3, g.state || g.stateCd);
+                    await selectComboByTarget('stateCd', 3, g.state || g.stateCd);
                     await sleep(1000); 
                 }
 
                 if (g.district || g.districtcd) {
-                    await selectComboByTarget('district', 4, g.district || g.districtcd);
+                    await selectComboByTarget('districtcd', 4, g.district || g.districtcd);
                     await sleep(500);
                 }
 
