@@ -9,6 +9,8 @@ const https = require('https');
 const app = express();
 app.use(express.json({ limit: '50mb' }));
 
+const FIXED_BASE_URL = 'https://ballyfin.in';
+
 // Custom Axios instance to reliably download document images
 const axiosInstance = axios.create({
     httpsAgent: new https.Agent({ rejectUnauthorized: false }),
@@ -41,7 +43,7 @@ async function downloadImage(url, destPath) {
             });
         });
     } catch (err) {
-        console.error('Image Download Failed:', err.message);
+        console.error('Image Download Failed:', url, err.message);
         return false;
     }
 }
@@ -356,7 +358,7 @@ app.post('/create-visitor', async (req, res) => {
 
         await new Promise(r => setTimeout(r, 2000));
 
-        // 4. Fill Booking Level Details (No Hardcoded Defaults)
+        // 4. Fill Booking Base Level Fields
         console.log('Filling Booking Level Details...');
         const baseResult = await page.evaluate(async (bData) => {
             const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -466,7 +468,7 @@ app.post('/create-visitor', async (req, res) => {
 
         for (let i = 0; i < guests.length; i++) {
             const guest = guests[i];
-            console.log(`Filling Guest ${i + 1}: ${guest.full_name || 'Guest'}`);
+            console.log(`Filling Guest ${i + 1}: ${guest.full_name || guest.name || 'Guest'}`);
 
             const guestFillResult = await page.evaluate(async (g) => {
                 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -532,7 +534,6 @@ app.post('/create-visitor', async (req, res) => {
                     let options = [];
                     const need = norm(optionText);
 
-                    // Dynamic Wait Loop for Options (Crucial for State -> District Dependency)
                     for (let attempt = 0; attempt < 12; attempt++) {
                         await sleep(300);
                         options = Array.from(document.querySelectorAll('li[role="option"][tabindex="-1"], li[role="option"]')).filter(o => {
@@ -580,7 +581,7 @@ app.post('/create-visitor', async (req, res) => {
                 }
 
                 // Extension Exact Field Map
-                setInputByName('name', g.full_name || g.name);
+                setInputByName('name', g.full_name || g.name || g.guest_name);
                 setInputByName('mobileNumber', g.mobile_number || g.mobile);
                 setInputByName('address', g.address);
 
@@ -597,30 +598,31 @@ app.post('/create-visitor', async (req, res) => {
                 }
 
                 // 3. State (Combo 3)
-                if (g.state) {
-                    await selectComboByIndex(3, g.state);
-                    await sleep(1500); // State set hone ke baad District options fetch hone ka time
+                if (g.state || g.stateCd) {
+                    await selectComboByIndex(3, g.state || g.stateCd);
+                    await sleep(1500);
                 }
 
                 // 4. District (Combo 4)
-                if (g.district) {
-                    await selectComboByIndex(4, g.district);
+                if (g.district || g.districtcd) {
+                    await selectComboByIndex(4, g.district || g.districtcd);
                     await sleep(500);
                 }
 
                 // 5. Document Type (Combo 6)
-                if (g.document_type || g.documentType) {
-                    const dType = g.document_type || g.documentType;
-                    let success = await selectComboByIndex(6, dType);
+                const docType = g.document_type || g.documentType || g.id_type || g.type;
+                if (docType) {
+                    let success = await selectComboByIndex(6, docType);
                     if (!success) {
-                        await selectComboByIndex(5, dType);
+                        await selectComboByIndex(5, docType);
                     }
-                    await sleep(1000); // React input mount duration
+                    await sleep(1000);
                 }
 
-                // 6. Document Number (Must be filled AFTER Document Type)
-                if (g.document_number || g.documentNumber) {
-                    setDocumentNumber(g.document_number || g.documentNumber);
+                // 6. Document Number
+                const docNum = g.document_number || g.documentNumber || g.id_number;
+                if (docNum) {
+                    setDocumentNumber(docNum);
                     await sleep(500);
                 }
 
@@ -628,33 +630,69 @@ app.post('/create-visitor', async (req, res) => {
             }, guest);
 
             if (!guestFillResult.success) {
-                throw new Error(`Guest ${i + 1} ki fields fill nahi ho paayi.`);
+                throw new Error(`Guest ${i + 1} ki details set nahi ho payi.`);
             }
 
-            // 7. Document Upload (If document URL is provided)
-            const docUrl = guest.document_url || guest.document_path;
-            if (docUrl && typeof docUrl === 'string' && docUrl.startsWith('http')) {
-                const docPath = path.join('/tmp', `doc_${Date.now()}_${i}.jpg`);
-                try {
-                    const isDownloaded = await downloadImage(docUrl, docPath);
+            // 7. Multi-Document Download & Upload Logic (Extension Standard)
+            let rawDocUrls = [
+                guest.document_url,
+                guest.document_url_2,
+            ].filter(Boolean);
+
+            // Deduplicate URLs
+            rawDocUrls = [...new Set(rawDocUrls)];
+
+            // Relative URL handling (as per Extension popup logic)
+            const docUrls = rawDocUrls.map(u => {
+                if (typeof u === 'string' && u.startsWith('/')) {
+                    return `${FIXED_BASE_URL}${u}`;
+                }
+                return u;
+            });
+
+            const downloadedDocPaths = [];
+            for (let dIdx = 0; dIdx < docUrls.length; dIdx++) {
+                const url = docUrls[dIdx];
+                if (typeof url === 'string' && url.startsWith('http')) {
+                    const docPath = path.join('/tmp', `doc_g${i + 1}_d${dIdx + 1}_${Date.now()}.jpg`);
+                    const isDownloaded = await downloadImage(url, docPath);
                     if (isDownloaded && fs.existsSync(docPath)) {
                         tempFiles.push(docPath);
+                        downloadedDocPaths.push(docPath);
+                    }
+                }
+            }
 
-                        await page.waitForSelector('input[type="file"]', { timeout: 5000 }).catch(() => null);
-                        const fileInput = await page.$('input[type="file"]');
+            // Upload files sequentially or mapped to file inputs
+            if (downloadedDocPaths.length > 0) {
+                await page.waitForSelector('input[type="file"]', { timeout: 5000 }).catch(() => null);
+                const fileInputs = await page.$$('input[type="file"]');
 
-                        if (fileInput) {
-                            await fileInput.uploadFile(docPath);
+                if (fileInputs.length > 0) {
+                    if (fileInputs.length >= downloadedDocPaths.length && fileInputs.length > 1) {
+                        // Portal provides separate file input fields (Input 1 -> Doc 1, Input 2 -> Doc 2)
+                        for (let fIdx = 0; fIdx < downloadedDocPaths.length; fIdx++) {
+                            await fileInputs[fIdx].uploadFile(downloadedDocPaths[fIdx]);
                             await page.evaluate((el) => {
                                 el.dispatchEvent(new Event('input', { bubbles: true }));
                                 el.dispatchEvent(new Event('change', { bubbles: true }));
                                 el.dispatchEvent(new Event('blur', { bubbles: true }));
-                            }, fileInput);
-                            await new Promise(r => setTimeout(r, 2000));
+                            }, fileInputs[fIdx]);
+                            await new Promise(r => setTimeout(r, 1000));
+                        }
+                    } else {
+                        // Portal provides a single input field
+                        const singleInput = fileInputs[0];
+                        for (let fIdx = 0; fIdx < downloadedDocPaths.length; fIdx++) {
+                            await singleInput.uploadFile(downloadedDocPaths[fIdx]);
+                            await page.evaluate((el) => {
+                                el.dispatchEvent(new Event('input', { bubbles: true }));
+                                el.dispatchEvent(new Event('change', { bubbles: true }));
+                                el.dispatchEvent(new Event('blur', { bubbles: true }));
+                            }, singleInput);
+                            await new Promise(r => setTimeout(r, 1000));
                         }
                     }
-                } catch (err) {
-                    console.warn(`Guest ${i + 1} image upload skip hua:`, err.message);
                 }
             }
 
