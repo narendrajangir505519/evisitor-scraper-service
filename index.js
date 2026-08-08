@@ -590,12 +590,12 @@ app.post('/create-visitor', async (req, res) => {
 
                 if (g.gender) {
                     await selectComboByTarget('gender', 1, getGender(g.gender));
-                    await sleep(500);
+                    await sleep(1000);
                 }
 
                 if (g.nationality) {
                     await selectComboByTarget('nationality', 2, g.nationality);
-                    await sleep(500);
+                    await sleep(1000);
                 }
 
                 if (g.state || g.stateCd) {
