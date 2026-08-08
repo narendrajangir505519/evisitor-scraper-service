@@ -388,10 +388,6 @@ app.post('/create-visitor', async (req, res) => {
                 return false;
             }
 
-            console.log('CHECK-IN FROM API:', bData.check_in_date_time);
-console.log('BROWSER NOW:', new Date().toString());
-console.log('BROWSER ISO:', new Date().toISOString());
-
             if (bData.check_in_date_time) setInputByName('checkInDateTime', bData.check_in_date_time);
             if (bData.room_number) setInputByName('roomNumber', bData.room_number);
             if (bData.coming_from) setInputByName('comingLocation', bData.coming_from);
@@ -414,6 +410,9 @@ console.log('BROWSER ISO:', new Date().toISOString());
         for (let i = 0; i < guests.length; i++) {
             const guest = guests[i];
             console.log(`Filling Guest ${i + 1}: ${guest.full_name || guest.name || 'Guest'}`);
+            console.log('CHECK-IN FROM API:', bData.check_in_date_time);
+console.log('BROWSER NOW:', new Date().toString());
+console.log('BROWSER ISO:', new Date().toISOString());
 
             const guestFillResult = await page.evaluate(async (g) => {
                 const sleep = ms => new Promise(r => setTimeout(r, ms));
