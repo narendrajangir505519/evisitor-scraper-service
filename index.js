@@ -620,10 +620,12 @@ app.post('/create-visitor', async (req, res) => {
                 }
 
                 // 6. Document Number
-                const docNum = g.document_number || g.documentNumber || g.id_number;
-                if (docNum) {
-                    setDocumentNumber(docNum);
-                    await sleep(500);
+                if(g.documentType != "Aadhaar Card"){
+                    const docNum = g.document_number || g.documentNumber || g.id_number;
+                    if (docNum) {
+                        setDocumentNumber(docNum);
+                        await sleep(1000);
+                    }
                 }
 
                 return { success: true };
