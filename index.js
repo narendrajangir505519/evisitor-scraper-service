@@ -322,7 +322,7 @@ app.post('/create-visitor', async (req, res) => {
             throw new Error('Create Visitor / Check-In button nahi mila.');
         }
 
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, 1500));
 
         console.log('Filling Booking Level Details...');
         const baseResult = await page.evaluate(async (bData) => {
@@ -600,12 +600,12 @@ app.post('/create-visitor', async (req, res) => {
 
                 // if (g.nationality) {
                 //     await selectComboByTarget('nationality', 2, g.nationality);
-                //     await sleep(1000);
+                //     await sleep(500);
                 // }
 
                 if (g.state || g.stateCd) {
                     await selectComboByTarget('stateCd', 3, g.state || g.stateCd);
-                    await sleep(1000); 
+                    await sleep(500); 
                 }
 
                 if (g.district || g.districtcd) {
@@ -619,7 +619,7 @@ app.post('/create-visitor', async (req, res) => {
                     if (!success) {
                         await selectComboByTarget('type', 5, docType);
                     }
-                    await sleep(1000);
+                    await sleep(500);
                 }
 
                 const isAadhaar = norm(docType).includes('aadhaar') || norm(docType).includes('aadhar');
@@ -627,7 +627,7 @@ app.post('/create-visitor', async (req, res) => {
                     const docNum = g.document_number || g.documentNumber || g.id_number || g.doc_number;
                     if (docNum) {
                         setDocumentNumber(docNum);
-                        await sleep(1000);
+                        await sleep(500);
                     }
                 }
 
