@@ -324,10 +324,6 @@ app.post('/create-visitor', async (req, res) => {
             const sleep = ms => new Promise(r => setTimeout(r, ms));
             const norm = v => String(v || '').replace(/\u200B/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
 
-            console.log('CHECK-IN FROM API:', bData.check_in_date_time);
-console.log('BROWSER NOW:', new Date().toString());
-console.log('BROWSER ISO:', new Date().toISOString());
-
             function fireReactInput(el, value) {
                 if (!el) return false;
                 try { el.removeAttribute('disabled'); } catch (e) {}
