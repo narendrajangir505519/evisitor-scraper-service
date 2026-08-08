@@ -11,7 +11,6 @@ app.use(express.json({ limit: '50mb' }));
 
 const FIXED_BASE_URL = 'https://ballyfin.in';
 
-// Custom Axios instance
 const axiosInstance = axios.create({
     httpsAgent: new https.Agent({ rejectUnauthorized: false }),
     timeout: 20000
@@ -362,7 +361,6 @@ app.post('/create-visitor', async (req, res) => {
                 for (let attempt = 0; attempt < 10; attempt++) {
                     await sleep(300);
                     options = Array.from(document.querySelectorAll('li[role="option"]')).filter(o => {
-                        // Strict Visibility check
                         const rect = o.getBoundingClientRect();
                         const isVisible = rect.width > 0 && rect.height > 0;
                         const t = (o.innerText || o.textContent || '').replace(/\u200B/g, '').trim();
@@ -472,7 +470,9 @@ app.post('/create-visitor', async (req, res) => {
                     return v || '';
                 }
 
-                // Robust Dropdown Selector with strict visibility check & Input support
+                // ==========================================
+                // PERMANENT FIX FOR DISTRICT/DEPENDENT APIS
+                // ==========================================
                 async function selectComboByTarget(targetKeyword, fallbackIndex, optionText) {
                     if (!optionText) return false;
                     const combos = Array.from(document.querySelectorAll('[role="combobox"]'));
@@ -497,7 +497,7 @@ app.post('/create-visitor', async (req, res) => {
 
                     if (!combo) return false;
 
-                    // WAIT FOR FIELD TO ENABLE (Important for State & District)
+                    // 1. Wait for field to enable completely
                     for (let attempt = 0; attempt < 20; attempt++) { 
                         const isMuiDisabled = combo.classList.contains('Mui-disabled') || (combo.closest('.Mui-disabled') !== null);
                         const isDisabled = combo.hasAttribute('disabled') || combo.getAttribute('aria-disabled') === 'true';
@@ -509,53 +509,59 @@ app.post('/create-visitor', async (req, res) => {
                     combo.scrollIntoView({ behavior: 'smooth', block: 'center' });
                     await sleep(400);
                     
-                    // IF Input, type text to trigger UI filter
+                    const need = norm(optionText);
+
+                    // 2. Clear input and type to trigger API call
                     if (combo.tagName === 'INPUT') {
                         combo.focus();
-                        combo.value = '';
+                        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                        if (setter) setter.call(combo, ''); else combo.value = '';
                         combo.dispatchEvent(new Event('input', { bubbles: true }));
                         await sleep(300);
                         
                         if (optionText.length > 2) {
-                            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-                            if (setter) setter.call(combo, optionText.substring(0, 3));
-                            else combo.value = optionText.substring(0, 3);
+                            const typeText = optionText.substring(0, 4);
+                            if (setter) setter.call(combo, typeText); else combo.value = typeText;
                             combo.dispatchEvent(new Event('input', { bubbles: true }));
                             await sleep(500); 
                         }
                     }
 
+                    // 3. Open Dropdown
                     combo.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
                     combo.click();
 
-                    let options = [];
-                    const need = norm(optionText);
+                    let option = null;
 
-                    for (let attempt = 0; attempt < 15; attempt++) {
-                        await sleep(400);
-                        // STRICTLY ONLY FETCH VISIBLE OPTIONS to avoid picking closed state dropdown elements
-                        options = Array.from(document.querySelectorAll('li[role="option"]')).filter(o => {
+                    // 4. THE FIX: Wait EXACTLY for our target text to appear in DOM. 
+                    // This handles API loading times natively.
+                    for (let attempt = 0; attempt < 30; attempt++) { // Maximum 15 Seconds Wait
+                        await sleep(500);
+                        
+                        // Get strictly visible options
+                        const options = Array.from(document.querySelectorAll('li[role="option"]')).filter(o => {
                             const rect = o.getBoundingClientRect();
-                            const isVisible = rect.width > 0 && rect.height > 0;
-                            const t = (o.innerText || o.textContent || '').replace(/\u200B/g, '').trim();
-                            return isVisible && t !== '';
+                            return rect.width > 0 && rect.height > 0;
                         });
-                        if (options.length > 0) break;
-                    }
 
-                    if (options.length === 0) {
-                        document.body.click();
-                        return false;
-                    }
+                        option = options.find(o => {
+                            const text = norm(o.innerText || o.textContent);
+                            return text === need || text.startsWith(need + ' ') || text.endsWith(' ' + need) || text.includes(' ' + need + ' ');
+                        });
 
-                    let option = options.find(o => {
-                        const text = norm(o.innerText || o.textContent);
-                        return text === need || text.startsWith(need + ' ') || text.endsWith(' ' + need) || text.includes(' ' + need + ' ');
-                    });
+                        // Fallback matching
+                        if (!option) {
+                            option = options.find(o => norm(o.innerText || o.textContent).includes(need));
+                        }
 
-                    // Fallback to substring matching
-                    if (!option) {
-                        option = options.find(o => norm(o.innerText || o.textContent).includes(need));
+                        if (option) {
+                            break; // API loaded and specific District is found!
+                        }
+
+                        // Re-trigger dropdown click periodically if React closed it during API fetch
+                        if (attempt === 10 || attempt === 20) {
+                            combo.click();
+                        }
                     }
 
                     if (option) {
@@ -565,23 +571,29 @@ app.post('/create-visitor', async (req, res) => {
                         option.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
                         option.click();
                         await sleep(400);
-                    } else if (combo.tagName === 'INPUT' && options[0]) {
-                        // Safe Fallback if typing worked but text didn't exact match
-                        options[0].click();
-                        await sleep(400);
-                    } else {
-                        document.body.click();
-                        return false;
+                    } else if (combo.tagName === 'INPUT') {
+                        // Safe fallback just in case exact match failed but options exist
+                        const firstOption = document.querySelector('li[role="option"]');
+                        if (firstOption && firstOption.getBoundingClientRect().width > 0) {
+                            firstOption.click();
+                            await sleep(400);
+                        }
                     }
 
-                    // Ensure Dropdown closes
+                    // 5. Cleanup: Ensure dropdown closes and clears from DOM before next field
                     document.dispatchEvent(new KeyboardEvent('keydown', {
                         key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true
                     }));
-                    await sleep(200);
+                    await sleep(300);
                     document.body.click();
-                    await sleep(400);
-                    return true;
+                    
+                    // Wait for listbox portal to disappear
+                    for (let i = 0; i < 10; i++) {
+                        if (!document.querySelector('ul[role="listbox"]')) break;
+                        await sleep(200);
+                    }
+
+                    return !!option; // Return true only if option was successfully found
                 }
 
                 setInputByName('name', g.full_name || g.name || g.guest_name);
@@ -590,22 +602,22 @@ app.post('/create-visitor', async (req, res) => {
 
                 if (g.gender) {
                     await selectComboByTarget('gender', 1, getGender(g.gender));
-                    await sleep(1000);
+                    await sleep(500);
                 }
 
                 if (g.nationality) {
                     await selectComboByTarget('nationality', 2, g.nationality);
-                    await sleep(1000);
+                    await sleep(500);
                 }
 
                 if (g.state || g.stateCd) {
-                    await selectComboByTarget('state', 3, g.stateCd);
-                    await sleep(2000); // 2 Seconds exact wait so that District has time to API load
+                    await selectComboByTarget('state', 3, g.state || g.stateCd);
+                    await sleep(500); // District ka API wait ab function ke andar natively handle hoga
                 }
 
                 if (g.district || g.districtcd) {
-                    await selectComboByTarget('district', 4, g.districtcd);
-                    await sleep(1500);
+                    await selectComboByTarget('district', 4, g.district || g.districtcd);
+                    await sleep(500);
                 }
 
                 const docType = g.document_type || g.documentType || g.id_type || g.type || '';
