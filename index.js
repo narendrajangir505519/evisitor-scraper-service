@@ -595,7 +595,6 @@ app.post('/create-visitor', async (req, res) => {
 
                 if (g.gender) {
                     await selectComboByTarget('gender', 1, getGender(g.gender));
-                    await sleep(500);
                 }
 
                 // if (g.nationality) {
@@ -604,13 +603,11 @@ app.post('/create-visitor', async (req, res) => {
                 // }
 
                 if (g.state || g.stateCd) {
-                    await selectComboByTarget('stateCd', 3, g.state || g.stateCd);
-                    await sleep(500); 
+                    await selectComboByTarget('stateCd', 3, g.state || g.stateCd); 
                 }
 
                 if (g.district || g.districtcd) {
                     await selectComboByTarget('districtcd', 4, g.district || g.districtcd);
-                    await sleep(500);
                 }
 
                 const docType = g.document_type || g.documentType || g.id_type || g.type || '';
@@ -619,7 +616,6 @@ app.post('/create-visitor', async (req, res) => {
                     if (!success) {
                         await selectComboByTarget('type', 5, docType);
                     }
-                    await sleep(500);
                 }
 
                 const isAadhaar = norm(docType).includes('aadhaar') || norm(docType).includes('aadhar');
@@ -629,11 +625,6 @@ app.post('/create-visitor', async (req, res) => {
                         setDocumentNumber(docNum);
                         await sleep(500);
                     }
-                }
-
-                if (g.district || g.districtcd) {
-                    await selectComboByTarget('district', 4, g.district || g.districtcd);
-                    await sleep(500);
                 }
 
                 return { success: true };
@@ -657,18 +648,34 @@ app.post('/create-visitor', async (req, res) => {
                 return u;
             });
 
-            const downloadedDocPaths = [];
-            for (let dIdx = 0; dIdx < docUrls.length; dIdx++) {
-                const url = docUrls[dIdx];
-                if (typeof url === 'string' && url.startsWith('http')) {
-                    const docPath = path.join('/tmp', `doc_g${i + 1}_d${dIdx + 1}_${Date.now()}.jpg`);
-                    const isDownloaded = await downloadImage(url, docPath);
-                    if (isDownloaded && fs.existsSync(docPath)) {
-                        tempFiles.push(docPath);
-                        downloadedDocPaths.push(docPath);
+            const downloadedResults = await Promise.all(
+                docUrls.map(async (url, dIdx) => {
+            
+                    if (
+                        typeof url !== 'string' ||
+                        !url.startsWith('http')
+                    ) {
+                        return null;
                     }
-                }
-            }
+            
+                    const docPath = path.join(
+                        '/tmp',
+                        `doc_g${i + 1}_d${dIdx + 1}_${Date.now()}.jpg`
+                    );
+            
+                    const ok = await downloadImage(url, docPath);
+            
+                    if (!ok || !fs.existsSync(docPath)) {
+                        return null;
+                    }
+            
+                    tempFiles.push(docPath);
+            
+                    return docPath;
+                })
+            );
+            
+            const downloadedDocPaths = downloadedResults.filter(Boolean);
 
             if (downloadedDocPaths.length > 0) {
                 await page.waitForSelector('input[type="file"]', { timeout: 5000 }).catch(() => null);
@@ -708,7 +715,29 @@ app.post('/create-visitor', async (req, res) => {
                 if (!addBtn) return { success: false, error: '"Add" button nahi mila.' };
 
                 addBtn.click();
-                await sleep(1500);
+
+                for (let x = 0; x < 15; x++) {
+                    await sleep(100);
+                
+                    const errors = Array.from(
+                        document.querySelectorAll(
+                            '.Mui-error, .MuiFormHelperText-root.Mui-error'
+                        )
+                    )
+                    .map(e => e.innerText.trim())
+                    .filter(Boolean);
+                
+                    if (errors.length) {
+                        return {
+                            success: false,
+                            error: 'Input Error: ' +
+                                [...new Set(errors)].join(' | ')
+                        };
+                    }
+                
+                    // Agar error nahi hai aur Add ke baad form reset ho gaya
+                    // to process continue kar sakte hain.
+                }
 
                 const errors = Array.from(document.querySelectorAll('.Mui-error, .MuiFormHelperText-root.Mui-error'))
                     .map(e => e.innerText.trim())
