@@ -411,7 +411,7 @@ app.post('/create-visitor', async (req, res) => {
 
                 if (options.length === 0) {
                     document.body.click();
-                    await sleep(300);
+                    await sleep(500);
                     return false;
                 }
 
@@ -500,10 +500,13 @@ app.post('/create-visitor', async (req, res) => {
                     if (!value) return false;
                     const selectors = [
                         'input[name="documentNumber"]',
-                        'input[placeholder="Enter document number"]',
-                        'input[placeholder="Enter Document Number"]',
+                        'input[placeholder*="document number" i]',
+                        'input[placeholder*="Document Number" i]',
+                        'input[placeholder*="document" i]',
+                        'input[placeholder*="Document" i]',
                         'input[inputmode="text"][maxlength="25"]',
-                        'input[name="idNumber"]'
+                        'input[name="idNumber"]',
+                        'input[name="docNumber"]'
                     ];
                     for (const selector of selectors) {
                         const el = document.querySelector(selector);
@@ -520,14 +523,38 @@ app.post('/create-visitor', async (req, res) => {
                     return v || '';
                 }
 
-                async function selectComboByIndex(index, optionText) {
+                // Robust Dropdown Selector (Target keyword + index fallback)
+                async function selectComboByTarget(targetKeyword, fallbackIndex, optionText) {
                     if (!optionText) return false;
                     const combos = Array.from(document.querySelectorAll('[role="combobox"]'));
-                    const combo = combos[index] || combos[combos.length - 1];
+                    
+                    let combo = null;
+                    if (targetKeyword) {
+                        const kw = norm(targetKeyword);
+                        combo = combos.find(c => {
+                            const parent = c.closest('.MuiFormControl-root, .form-group, div') || c.parentElement;
+                            const text = norm(parent ? parent.innerText || parent.textContent : '');
+                            const placeholder = norm(c.getAttribute('placeholder') || '');
+                            const ariaLabel = norm(c.getAttribute('aria-label') || '');
+                            const id = norm(c.id || '');
+                            return text.includes(kw) || placeholder.includes(kw) || ariaLabel.includes(kw) || id.includes(kw);
+                        });
+                    }
+
+                    if (!combo && fallbackIndex !== undefined) {
+                        combo = combos[fallbackIndex] || combos[combos.length - 1];
+                    }
+
                     if (!combo) return false;
 
+                    // Dropdown enable hone ka wait karein
+                    for (let attempt = 0; attempt < 10; attempt++) {
+                        if (!combo.hasAttribute('disabled') && combo.getAttribute('aria-disabled') !== 'true') break;
+                        await sleep(1000);
+                    }
+
                     combo.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    await sleep(300);
+                    await sleep(1000);
                     combo.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
                     combo.click();
 
@@ -561,22 +588,22 @@ app.post('/create-visitor', async (req, res) => {
 
                     if (!option) {
                         document.body.click();
-                        await sleep(300);
+                        await sleep(1000);
                         return false;
                     }
 
                     option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
                     option.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
                     option.click();
-                    await sleep(300);
+                    await sleep(1000);
 
                     document.dispatchEvent(new KeyboardEvent('keydown', {
                         key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true
                     }));
-                    await sleep(200);
+                    await sleep(1000);
                     document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
                     document.body.click();
-                    await sleep(500);
+                    await sleep(1000);
                     return true;
                 }
 
@@ -585,43 +612,44 @@ app.post('/create-visitor', async (req, res) => {
                 setInputByName('mobileNumber', g.mobile_number || g.mobile);
                 setInputByName('address', g.address);
 
-                // 1. Gender (Combo 1)
+                // 1. Gender
                 if (g.gender) {
-                    await selectComboByIndex(1, getGender(g.gender));
+                    await selectComboByTarget('gender', 1, getGender(g.gender));
                     await sleep(1000);
                 }
 
-                // 2. Nationality (Combo 2)
+                // 2. Nationality
                 if (g.nationality) {
-                    await selectComboByIndex(2, g.nationality);
+                    await selectComboByTarget('nationality', 2, g.nationality);
                     await sleep(1000);
                 }
 
-                // 3. State (Combo 3)
+                // 3. State
                 if (g.state || g.stateCd) {
-                    await selectComboByIndex(3, g.state || g.stateCd);
-                    await sleep(1500);
+                    await selectComboByTarget('state', 3, g.state || g.stateCd);
+                    await sleep(1500); // District API loading time
                 }
 
-                // 4. District (Combo 4)
+                // 4. District
                 if (g.district || g.districtcd) {
-                    await selectComboByIndex(4, g.district || g.districtcd);
-                    await sleep(1500);
+                    await selectComboByTarget('district', 4, g.district || g.districtcd);
+                    await sleep(1000);
                 }
 
-                // 5. Document Type (Combo 6)
-                const docType = g.document_type || g.documentType || g.id_type || g.type;
+                // 5. Document Type
+                const docType = g.document_type || g.documentType || g.id_type || g.type || '';
                 if (docType) {
-                    let success = await selectComboByIndex(6, docType);
+                    let success = await selectComboByTarget('document', 6, docType);
                     if (!success) {
-                        await selectComboByIndex(5, docType);
+                        await selectComboByTarget('type', 5, docType);
                     }
                     await sleep(1000);
                 }
 
-                // 6. Document Number
-                if(g.documentType != "Aadhaar Card"){
-                    const docNum = g.document_number || g.documentNumber || g.id_number;
+                // 6. Document Number (FIX: Document Type Aadhaar Card NA hone par hi set karein)
+                const isAadhaar = norm(docType).includes('aadhaar') || norm(docType).includes('aadhar');
+                if (!isAadhaar) {
+                    const docNum = g.document_number || g.documentNumber || g.id_number || g.doc_number;
                     if (docNum) {
                         setDocumentNumber(docNum);
                         await sleep(1000);
@@ -635,16 +663,14 @@ app.post('/create-visitor', async (req, res) => {
                 throw new Error(`Guest ${i + 1} ki details set nahi ho payi.`);
             }
 
-            // 7. Multi-Document Download & Upload Logic (Extension Standard)
+            // 7. Multi-Document Download & Upload Logic
             let rawDocUrls = [
                 guest.document_url,
                 guest.document_url_2,
             ].filter(Boolean);
 
-            // Deduplicate URLs
             rawDocUrls = [...new Set(rawDocUrls)];
 
-            // Relative URL handling (as per Extension popup logic)
             const docUrls = rawDocUrls.map(u => {
                 if (typeof u === 'string' && u.startsWith('/')) {
                     return `${FIXED_BASE_URL}${u}`;
@@ -665,14 +691,12 @@ app.post('/create-visitor', async (req, res) => {
                 }
             }
 
-            // Upload files sequentially or mapped to file inputs
             if (downloadedDocPaths.length > 0) {
                 await page.waitForSelector('input[type="file"]', { timeout: 5000 }).catch(() => null);
                 const fileInputs = await page.$$('input[type="file"]');
 
                 if (fileInputs.length > 0) {
                     if (fileInputs.length >= downloadedDocPaths.length && fileInputs.length > 1) {
-                        // Portal provides separate file input fields (Input 1 -> Doc 1, Input 2 -> Doc 2)
                         for (let fIdx = 0; fIdx < downloadedDocPaths.length; fIdx++) {
                             await fileInputs[fIdx].uploadFile(downloadedDocPaths[fIdx]);
                             await page.evaluate((el) => {
@@ -683,7 +707,6 @@ app.post('/create-visitor', async (req, res) => {
                             await new Promise(r => setTimeout(r, 1000));
                         }
                     } else {
-                        // Portal provides a single input field
                         const singleInput = fileInputs[0];
                         for (let fIdx = 0; fIdx < downloadedDocPaths.length; fIdx++) {
                             await singleInput.uploadFile(downloadedDocPaths[fIdx]);
