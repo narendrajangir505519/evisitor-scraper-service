@@ -50,11 +50,12 @@ app.all('/scrape', async (req, res) => {
                 '--disable-accelerated-2d-canvas',
                 '--disable-gpu',
                 '--no-first-run',
+                '--single-process',
                 '--no-zygote'
             ],
             defaultViewport: { width: 1280, height: 800 },
             executablePath: await chromium.executablePath(),
-            headless: chromium.headless,
+            headless: true,
         });
 
         const page = await browser.newPage();
@@ -126,7 +127,7 @@ app.post('/login-evisitor', async (req, res) => {
             ],
             defaultViewport: { width: 1280, height: 800 },
             executablePath: await chromium.executablePath(),
-            headless: chromium.headless,
+            headless: true,
         });
 
         const page = await browser.newPage();
