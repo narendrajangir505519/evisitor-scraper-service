@@ -258,7 +258,10 @@ app.post('/login-evisitor', async (req, res) => {
 app.post('/create-visitor', async (req, res) => {
     const { auth_storage, booking_data } = req.body;
     const visitorsUrl = 'https://evisitor.rajasthan.gov.in/evisitor/user/visitors';
+    
+    // VARIABLES MOVED TO OUTER SCOPE FOR SCREENSHOT ACCESS
     let browser = null;
+    let page = null; 
     let tempFiles = [];
 
     try {
@@ -277,7 +280,7 @@ app.post('/create-visitor', async (req, res) => {
             headless: true,
         });
 
-        const page = await browser.newPage();
+        page = await browser.newPage(); // Assigned page here
 
         await page.goto('https://evisitor.rajasthan.gov.in/evisitor', { waitUntil: 'domcontentloaded' });
         if (auth_storage) {
@@ -470,9 +473,6 @@ app.post('/create-visitor', async (req, res) => {
                     return v || '';
                 }
 
-                // ==========================================
-                // PERMANENT FIX FOR DISTRICT/DEPENDENT APIS
-                // ==========================================
                 async function selectComboByTarget(targetKeyword, fallbackIndex, optionText) {
                     if (!optionText) return false;
                     const combos = Array.from(document.querySelectorAll('[role="combobox"]'));
@@ -497,7 +497,6 @@ app.post('/create-visitor', async (req, res) => {
 
                     if (!combo) return false;
 
-                    // 1. Wait for field to enable completely
                     for (let attempt = 0; attempt < 20; attempt++) { 
                         const isMuiDisabled = combo.classList.contains('Mui-disabled') || (combo.closest('.Mui-disabled') !== null);
                         const isDisabled = combo.hasAttribute('disabled') || combo.getAttribute('aria-disabled') === 'true';
@@ -511,7 +510,6 @@ app.post('/create-visitor', async (req, res) => {
                     
                     const need = norm(optionText);
 
-                    // 2. Clear input and type to trigger API call
                     if (combo.tagName === 'INPUT') {
                         combo.focus();
                         const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
@@ -527,18 +525,14 @@ app.post('/create-visitor', async (req, res) => {
                         }
                     }
 
-                    // 3. Open Dropdown
                     combo.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
                     combo.click();
 
                     let option = null;
 
-                    // 4. THE FIX: Wait EXACTLY for our target text to appear in DOM. 
-                    // This handles API loading times natively.
-                    for (let attempt = 0; attempt < 30; attempt++) { // Maximum 15 Seconds Wait
+                    for (let attempt = 0; attempt < 30; attempt++) { 
                         await sleep(500);
                         
-                        // Get strictly visible options
                         const options = Array.from(document.querySelectorAll('li[role="option"]')).filter(o => {
                             const rect = o.getBoundingClientRect();
                             return rect.width > 0 && rect.height > 0;
@@ -549,16 +543,14 @@ app.post('/create-visitor', async (req, res) => {
                             return text === need || text.startsWith(need + ' ') || text.endsWith(' ' + need) || text.includes(' ' + need + ' ');
                         });
 
-                        // Fallback matching
                         if (!option) {
                             option = options.find(o => norm(o.innerText || o.textContent).includes(need));
                         }
 
                         if (option) {
-                            break; // API loaded and specific District is found!
+                            break; 
                         }
 
-                        // Re-trigger dropdown click periodically if React closed it during API fetch
                         if (attempt === 10 || attempt === 20) {
                             combo.click();
                         }
@@ -572,7 +564,6 @@ app.post('/create-visitor', async (req, res) => {
                         option.click();
                         await sleep(400);
                     } else if (combo.tagName === 'INPUT') {
-                        // Safe fallback just in case exact match failed but options exist
                         const firstOption = document.querySelector('li[role="option"]');
                         if (firstOption && firstOption.getBoundingClientRect().width > 0) {
                             firstOption.click();
@@ -580,20 +571,18 @@ app.post('/create-visitor', async (req, res) => {
                         }
                     }
 
-                    // 5. Cleanup: Ensure dropdown closes and clears from DOM before next field
                     document.dispatchEvent(new KeyboardEvent('keydown', {
                         key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true
                     }));
                     await sleep(300);
                     document.body.click();
                     
-                    // Wait for listbox portal to disappear
                     for (let i = 0; i < 10; i++) {
                         if (!document.querySelector('ul[role="listbox"]')) break;
                         await sleep(200);
                     }
 
-                    return !!option; // Return true only if option was successfully found
+                    return !!option; 
                 }
 
                 setInputByName('name', g.full_name || g.name || g.guest_name);
@@ -612,7 +601,7 @@ app.post('/create-visitor', async (req, res) => {
 
                 if (g.state || g.stateCd) {
                     await selectComboByTarget('state', 3, g.state || g.stateCd);
-                    await sleep(500); // District ka API wait ab function ke andar natively handle hoga
+                    await sleep(500); 
                 }
 
                 if (g.district || g.districtcd) {
@@ -723,6 +712,7 @@ app.post('/create-visitor', async (req, res) => {
             });
 
             if (!addResult.success) {
+                // YE ERROR THROW HOGA TOH CATCH BLOCK ME JAYEGA AUR SCREENSHOT LEGA
                 throw new Error(`Guest ${i + 1} (${guest.full_name || 'Guest'}) Add nahi ho paya: ${addResult.error}`);
             }
         }
@@ -749,9 +739,30 @@ app.post('/create-visitor', async (req, res) => {
         return res.json({ status: 'success', message: toastMessage });
 
     } catch (error) {
+        // ERROR AANE PAR YAHAN AAYEGA
         tempFiles.forEach(f => { try { fs.unlinkSync(f); } catch (e) {} });
+        
+        let errorScreenshotBase64 = null;
+        
+        // BROWSER CLOSE HONE SE PEHLE SCREENSHOT LENA
+        if (page && !page.isClosed()) {
+            try {
+                console.log('Error aaya, screenshot capture kar rahe hain...');
+                // fullPage true rakha hai taaki poora error form dikhe
+                errorScreenshotBase64 = await page.screenshot({ encoding: 'base64', fullPage: true }); 
+            } catch (screenshotError) {
+                console.error("Screenshot capture failed:", screenshotError);
+            }
+        }
+
         if (browser) await browser.close();
-        return res.status(400).json({ status: 'failed', message: error.message });
+        
+        return res.status(400).json({ 
+            status: 'failed', 
+            message: error.message,
+            // JSON ME BASE64 IMAGE BHEJ RAHE HAI
+            error_screenshot: errorScreenshotBase64 ? `data:image/png;base64,${errorScreenshotBase64}` : null 
+        });
     }
 });
 
