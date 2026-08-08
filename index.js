@@ -594,14 +594,14 @@ app.post('/create-visitor', async (req, res) => {
                     await sleep(500);
                 }
 
-                if (g.nationality) {
-                    await selectComboByTarget('nationality', 2, g.nationality);
-                    await sleep(500);
-                }
+                // if (g.nationality) {
+                //     await selectComboByTarget('nationality', 2, g.nationality);
+                //     await sleep(1000);
+                // }
 
                 if (g.state || g.stateCd) {
                     await selectComboByTarget('state', 3, g.state || g.stateCd);
-                    await sleep(500); 
+                    await sleep(1000); 
                 }
 
                 if (g.district || g.districtcd) {
@@ -625,6 +625,11 @@ app.post('/create-visitor', async (req, res) => {
                         setDocumentNumber(docNum);
                         await sleep(1000);
                     }
+                }
+
+                if (g.district || g.districtcd) {
+                    await selectComboByTarget('district', 4, g.district || g.districtcd);
+                    await sleep(500);
                 }
 
                 return { success: true };
