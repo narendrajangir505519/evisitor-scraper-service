@@ -3,7 +3,7 @@ const puppeteer = require('puppeteer-core');
 const chromium = require('@sparticuz/chromium');
 const fs = require('fs');
 const path = require('path');
-const axios = require('axios'); // File download karne ke liye (npm install axios)
+const axios = require('axios');
 const https = require('https');
 
 const app = express();
@@ -11,7 +11,7 @@ app.use(express.json({ limit: '50mb' }));
 
 const FIXED_BASE_URL = 'https://ballyfin.in';
 
-// Custom Axios instance to reliably download document images
+// Custom Axios instance
 const axiosInstance = axios.create({
     httpsAgent: new https.Agent({ rejectUnauthorized: false }),
     timeout: 20000
@@ -19,12 +19,10 @@ const axiosInstance = axios.create({
 
 const PORT = process.env.PORT || 3000;
 
-// Root URL Keep-Alive ke liye
 app.get('/', (req, res) => {
     res.send('E-Visitor Automation Scraper is Active & Fast!');
 });
 
-// Helper function: Document Image Download karne ke liye
 async function downloadImage(url, destPath) {
     if (!url) return false;
     try {
@@ -48,7 +46,6 @@ async function downloadImage(url, destPath) {
     }
 }
 
-// Main Automation & Scraper Endpoint
 app.all('/scrape', async (req, res) => {
     const targetUrl = req.query.url || req.body.url;
 
@@ -78,7 +75,6 @@ app.all('/scrape', async (req, res) => {
 
         const page = await browser.newPage();
 
-        // SPEED OPTIMIZATION: Images, Fonts, aur Stylesheets Block karein
         await page.setRequestInterception(true);
         page.on('request', (req) => {
             const resourceType = req.resourceType();
@@ -89,32 +85,18 @@ app.all('/scrape', async (req, res) => {
             }
         });
 
-        // Page Visit
         await page.goto(targetUrl, { 
             waitUntil: 'domcontentloaded', 
             timeout: 30000 
         });
 
-        // AUTOMATION STEPS (Agar Form Fill / Click karna ho):
-        // Example: Pehle element ke aane ka wait karein
         try {
             await page.waitForSelector('body', { timeout: 5000 });
-            
-            // Agar kisi specific input/button ko automations se handle karna ho:
-            /*
-            if (req.body.search_term) {
-                await page.type('#search_input', req.body.search_term);
-                await page.click('#submit_button');
-                await page.waitForNetworkIdle();
-            }
-            */
         } catch (e) {
             console.log('Element wait timeout, proceeding anyway...');
         }
 
-        // Final HTML Content Extract karein
         const htmlContent = await page.content();
-
         await browser.close();
 
         return res.send(htmlContent);
@@ -127,10 +109,7 @@ app.all('/scrape', async (req, res) => {
 
 app.post('/login-evisitor', async (req, res) => {
     const { url, sso_id, password } = req.body;
-
-    // Direct Protected Visitors URL
     const loginBaseUrl = url || 'https://evisitor.rajasthan.gov.in/evisitor';
-
     let browser = null;
 
     try {
@@ -150,30 +129,22 @@ app.post('/login-evisitor', async (req, res) => {
 
         const page = await browser.newPage();
 
-        // -------------------------------------------------------------
-        // STEP 2: Agar Redirect Ho Gaya -> Login Process Start Karein
-        // -------------------------------------------------------------
         console.log('Not logged in. Redirected to login page. Starting login automation...');
-        
         await page.goto(loginBaseUrl, { waitUntil: 'networkidle2', timeout: 45000 });
 
-        // Top Login Button Click
         const topLoginBtn = await page.$('button.login-btn');
         if (topLoginBtn) {
             await topLoginBtn.click();
         }
 
-        // Login Modal aur SSO ID Field aane ka wait karein
         await page.waitForSelector('input[placeholder="Enter SSO ID"]', { timeout: 15000 });
 
-        // CAPTCHA Element ka DOM me aane ka wait karein
         try {
             await page.waitForSelector('.css-uayl0r', { timeout: 8000 });
         } catch (e) {
             console.log('Captcha selector wait timeout, evaluating DOM...');
         }
 
-        // CAPTCHA Extract Karein
         const captchaCode = await page.evaluate(() => {
             const el = document.querySelector('.css-uayl0r');
             if (el && el.innerText.trim()) return el.innerText.trim();
@@ -193,7 +164,6 @@ app.post('/login-evisitor', async (req, res) => {
             throw new Error('CAPTCHA code DOM me load nahi ho paya. Refresh karke try karein.');
         }
 
-        // Form Inputs Fill Karein
         await page.click('input[placeholder="Enter SSO ID"]', { clickCount: 3 });
         await page.type('input[placeholder="Enter SSO ID"]', sso_id, { delay: 30 });
 
@@ -203,7 +173,6 @@ app.post('/login-evisitor', async (req, res) => {
         await page.click('input[placeholder="Enter Captcha"]', { clickCount: 3 });
         await page.type('input[placeholder="Enter Captcha"]', captchaCode, { delay: 30 });
 
-        // Submit Click
         const submitButton = await page.evaluateHandle(() => {
             const buttons = Array.from(document.querySelectorAll('button'));
             return buttons.find(b => b.textContent.trim() === 'Submit');
@@ -213,7 +182,6 @@ app.post('/login-evisitor', async (req, res) => {
             await submitButton.click();
         }
 
-        // Toast Status Capture
         let toastData = { success: false, message: '' };
         try {
             await page.waitForSelector('.Toastify__toast', { timeout: 8000 });
@@ -229,7 +197,6 @@ app.post('/login-evisitor', async (req, res) => {
             console.log('Toast wait complete.');
         }
 
-        // Invalid Credentials / Captcha Error
         if (toastData.message && !toastData.success) {
             await browser.close();
             return res.status(400).json({
@@ -239,18 +206,14 @@ app.post('/login-evisitor', async (req, res) => {
             });
         }
 
-        // Login ke baad Visitors Page Navigate hone ka wait karein
         await page.waitForFunction(() => !document.querySelector('.login-card'), { timeout: 15000 }).catch(() => null);
         await new Promise(resolve => setTimeout(resolve, 4000));
 
         const nextPageHtml = await page.content();
-        // const cookies = await page.cookies();
-        // ⭐ TAREOKA 1: CDP Session Se Browser Ki SABHI Domains Ki Cookies Fetch Karein
         const client = await page.target().createCDPSession();
         const cdpCookies = await client.send('Network.getAllCookies');
         const allCookies = cdpCookies.cookies || [];
 
-        // ⭐ TAREOKA 2: LocalStorage Aur SessionStorage Ka Data Nikalein
         const authStorage = await page.evaluate(() => {
             let localData = {};
             let sessionData = {};
@@ -317,7 +280,6 @@ app.post('/create-visitor', async (req, res) => {
 
         const page = await browser.newPage();
 
-        // 1. Restore Auth Storage
         await page.goto('https://evisitor.rajasthan.gov.in/evisitor', { waitUntil: 'domcontentloaded' });
         if (auth_storage) {
             await page.evaluate((storage) => {
@@ -330,7 +292,6 @@ app.post('/create-visitor', async (req, res) => {
             }, auth_storage);
         }
 
-        // 2. Open Visitors Page
         console.log('Navigating to Visitors Page...');
         await page.goto(visitorsUrl, { waitUntil: 'networkidle2', timeout: 35000 });
 
@@ -338,7 +299,6 @@ app.post('/create-visitor', async (req, res) => {
             throw new Error('Session expire ho gaya hai ya invalid auth data hai.');
         }
 
-        // 3. Open Visitor Modal
         const createBtnClicked = await page.evaluate(() => {
             const buttons = Array.from(document.querySelectorAll('button'));
             const targetBtn = buttons.find(b => {
@@ -358,7 +318,6 @@ app.post('/create-visitor', async (req, res) => {
 
         await new Promise(r => setTimeout(r, 2000));
 
-        // 4. Fill Booking Base Level Fields
         console.log('Filling Booking Level Details...');
         const baseResult = await page.evaluate(async (bData) => {
             const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -402,27 +361,26 @@ app.post('/create-visitor', async (req, res) => {
 
                 for (let attempt = 0; attempt < 10; attempt++) {
                     await sleep(300);
-                    options = Array.from(document.querySelectorAll('li[role="option"][tabindex="-1"], li[role="option"]')).filter(o => {
+                    options = Array.from(document.querySelectorAll('li[role="option"]')).filter(o => {
+                        // Strict Visibility check
+                        const rect = o.getBoundingClientRect();
+                        const isVisible = rect.width > 0 && rect.height > 0;
                         const t = (o.innerText || o.textContent || '').replace(/\u200B/g, '').trim();
-                        return t !== '';
+                        return isVisible && t !== '';
                     });
                     if (options.length > 0) break;
                 }
 
                 if (options.length === 0) {
                     document.body.click();
-                    await sleep(500);
+                    await sleep(300);
                     return false;
                 }
 
                 const option = options.find(o => {
                     const text = norm(o.innerText || o.textContent);
                     if (text === need) return true;
-                    return (
-                        text.startsWith(need + ' ') ||
-                        text.endsWith(' ' + need) ||
-                        text.includes(' ' + need + ' ')
-                    );
+                    return text.includes(need);
                 });
 
                 if (!option) {
@@ -431,17 +389,11 @@ app.post('/create-visitor', async (req, res) => {
                     return false;
                 }
 
+                option.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                await sleep(200);
                 option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
                 option.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
                 option.click();
-                await sleep(300);
-
-                document.dispatchEvent(new KeyboardEvent('keydown', {
-                    key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true
-                }));
-                await sleep(200);
-                document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-                document.body.click();
                 await sleep(500);
                 return true;
             }
@@ -462,7 +414,6 @@ app.post('/create-visitor', async (req, res) => {
             throw new Error('Booking base level fields fill nahi ho sake.');
         }
 
-        // 5. Guests Loop
         const guests = booking_data.guests || [];
         console.log(`Processing ${guests.length} guest(s)...`);
 
@@ -503,8 +454,6 @@ app.post('/create-visitor', async (req, res) => {
                         'input[placeholder*="document number" i]',
                         'input[placeholder*="Document Number" i]',
                         'input[placeholder*="document" i]',
-                        'input[placeholder*="Document" i]',
-                        'input[inputmode="text"][maxlength="25"]',
                         'input[name="idNumber"]',
                         'input[name="docNumber"]'
                     ];
@@ -523,7 +472,7 @@ app.post('/create-visitor', async (req, res) => {
                     return v || '';
                 }
 
-                // Robust Dropdown Selector (Target keyword + index fallback)
+                // Robust Dropdown Selector with strict visibility check & Input support
                 async function selectComboByTarget(targetKeyword, fallbackIndex, optionText) {
                     if (!optionText) return false;
                     const combos = Array.from(document.querySelectorAll('[role="combobox"]'));
@@ -537,7 +486,8 @@ app.post('/create-visitor', async (req, res) => {
                             const placeholder = norm(c.getAttribute('placeholder') || '');
                             const ariaLabel = norm(c.getAttribute('aria-label') || '');
                             const id = norm(c.id || '');
-                            return text.includes(kw) || placeholder.includes(kw) || ariaLabel.includes(kw) || id.includes(kw);
+                            const name = norm(c.getAttribute('name') || '');
+                            return text.includes(kw) || placeholder.includes(kw) || ariaLabel.includes(kw) || id.includes(kw) || name.includes(kw);
                         });
                     }
 
@@ -547,96 +497,117 @@ app.post('/create-visitor', async (req, res) => {
 
                     if (!combo) return false;
 
-                    // Dropdown enable hone ka wait karein
-                    for (let attempt = 0; attempt < 10; attempt++) {
-                        if (!combo.hasAttribute('disabled') && combo.getAttribute('aria-disabled') !== 'true') break;
-                        await sleep(1000);
+                    // WAIT FOR FIELD TO ENABLE (Important for State & District)
+                    for (let attempt = 0; attempt < 20; attempt++) { 
+                        const isMuiDisabled = combo.classList.contains('Mui-disabled') || (combo.closest('.Mui-disabled') !== null);
+                        const isDisabled = combo.hasAttribute('disabled') || combo.getAttribute('aria-disabled') === 'true';
+                        
+                        if (!isDisabled && !isMuiDisabled) break;
+                        await sleep(500);
                     }
 
                     combo.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    await sleep(1000);
+                    await sleep(400);
+                    
+                    // IF Input, type text to trigger UI filter
+                    if (combo.tagName === 'INPUT') {
+                        combo.focus();
+                        combo.value = '';
+                        combo.dispatchEvent(new Event('input', { bubbles: true }));
+                        await sleep(300);
+                        
+                        if (optionText.length > 2) {
+                            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                            if (setter) setter.call(combo, optionText.substring(0, 3));
+                            else combo.value = optionText.substring(0, 3);
+                            combo.dispatchEvent(new Event('input', { bubbles: true }));
+                            await sleep(500); 
+                        }
+                    }
+
                     combo.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
                     combo.click();
 
                     let options = [];
                     const need = norm(optionText);
 
-                    for (let attempt = 0; attempt < 12; attempt++) {
-                        await sleep(300);
-                        options = Array.from(document.querySelectorAll('li[role="option"][tabindex="-1"], li[role="option"]')).filter(o => {
+                    for (let attempt = 0; attempt < 15; attempt++) {
+                        await sleep(400);
+                        // STRICTLY ONLY FETCH VISIBLE OPTIONS to avoid picking closed state dropdown elements
+                        options = Array.from(document.querySelectorAll('li[role="option"]')).filter(o => {
+                            const rect = o.getBoundingClientRect();
+                            const isVisible = rect.width > 0 && rect.height > 0;
                             const t = (o.innerText || o.textContent || '').replace(/\u200B/g, '').trim();
-                            return t !== '';
+                            return isVisible && t !== '';
                         });
                         if (options.length > 0) break;
                     }
 
                     if (options.length === 0) {
                         document.body.click();
-                        await sleep(300);
                         return false;
                     }
 
-                    const option = options.find(o => {
+                    let option = options.find(o => {
                         const text = norm(o.innerText || o.textContent);
-                        if (text === need) return true;
-                        return (
-                            text.startsWith(need + ' ') ||
-                            text.endsWith(' ' + need) ||
-                            text.includes(' ' + need + ' ')
-                        );
+                        return text === need || text.startsWith(need + ' ') || text.endsWith(' ' + need) || text.includes(' ' + need + ' ');
                     });
 
+                    // Fallback to substring matching
                     if (!option) {
+                        option = options.find(o => norm(o.innerText || o.textContent).includes(need));
+                    }
+
+                    if (option) {
+                        option.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        await sleep(200);
+                        option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                        option.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+                        option.click();
+                        await sleep(400);
+                    } else if (combo.tagName === 'INPUT' && options[0]) {
+                        // Safe Fallback if typing worked but text didn't exact match
+                        options[0].click();
+                        await sleep(400);
+                    } else {
                         document.body.click();
-                        await sleep(1000);
                         return false;
                     }
 
-                    option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-                    option.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-                    option.click();
-                    await sleep(1000);
-
+                    // Ensure Dropdown closes
                     document.dispatchEvent(new KeyboardEvent('keydown', {
                         key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true
                     }));
-                    await sleep(1000);
-                    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+                    await sleep(200);
                     document.body.click();
-                    await sleep(1000);
+                    await sleep(400);
                     return true;
                 }
 
-                // Extension Exact Field Map
                 setInputByName('name', g.full_name || g.name || g.guest_name);
                 setInputByName('mobileNumber', g.mobile_number || g.mobile);
                 setInputByName('address', g.address);
 
-                // 1. Gender
                 if (g.gender) {
                     await selectComboByTarget('gender', 1, getGender(g.gender));
-                    await sleep(1000);
+                    await sleep(500);
                 }
 
-                // 2. Nationality
                 if (g.nationality) {
                     await selectComboByTarget('nationality', 2, g.nationality);
-                    await sleep(1000);
+                    await sleep(500);
                 }
 
-                // 3. State
                 if (g.state || g.stateCd) {
                     await selectComboByTarget('state', 3, g.state || g.stateCd);
-                    await sleep(1500); // District API loading time
+                    await sleep(2000); // 2 Seconds exact wait so that District has time to API load
                 }
 
-                // 4. District
                 if (g.district || g.districtcd) {
                     await selectComboByTarget('district', 4, g.district || g.districtcd);
-                    await sleep(1000);
+                    await sleep(1500);
                 }
 
-                // 5. Document Type
                 const docType = g.document_type || g.documentType || g.id_type || g.type || '';
                 if (docType) {
                     let success = await selectComboByTarget('document', 6, docType);
@@ -646,7 +617,6 @@ app.post('/create-visitor', async (req, res) => {
                     await sleep(1000);
                 }
 
-                // 6. Document Number (FIX: Document Type Aadhaar Card NA hone par hi set karein)
                 const isAadhaar = norm(docType).includes('aadhaar') || norm(docType).includes('aadhar');
                 if (!isAadhaar) {
                     const docNum = g.document_number || g.documentNumber || g.id_number || g.doc_number;
@@ -663,7 +633,6 @@ app.post('/create-visitor', async (req, res) => {
                 throw new Error(`Guest ${i + 1} ki details set nahi ho payi.`);
             }
 
-            // 7. Multi-Document Download & Upload Logic
             let rawDocUrls = [
                 guest.document_url,
                 guest.document_url_2,
@@ -721,7 +690,6 @@ app.post('/create-visitor', async (req, res) => {
                 }
             }
 
-            // 8. Click 'Add' Button
             console.log(`Clicking 'Add' button for Guest ${i + 1}...`);
             const addResult = await page.evaluate(async () => {
                 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -747,7 +715,6 @@ app.post('/create-visitor', async (req, res) => {
             }
         }
 
-        // 6. Submit Final Check-In
         console.log('Submitting Final Check-In...');
         await page.evaluate(() => {
             const buttons = Array.from(document.querySelectorAll('button'));
@@ -775,6 +742,7 @@ app.post('/create-visitor', async (req, res) => {
         return res.status(400).json({ status: 'failed', message: error.message });
     }
 });
+
 app.listen(PORT, () => {
     console.log(`Server active on port ${PORT}`);
 });
