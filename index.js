@@ -619,6 +619,11 @@ app.post('/create-visitor', async (req, res) => {
                     }
                 }
 
+                if (g.district || g.districtcd) {
+                    await selectComboByTarget('district', 4, g.district || g.districtcd);
+                    await sleep(800);
+                }
+
                 return { success: true };
             }, guest);
 
