@@ -1,3 +1,5 @@
+process.env.TZ = 'Asia/Kolkata';
+
 const express = require('express');
 const puppeteer = require('puppeteer-core');
 const chromium = require('@sparticuz/chromium');
@@ -281,6 +283,8 @@ app.post('/create-visitor', async (req, res) => {
         });
 
         page = await browser.newPage(); // Assigned page here
+
+        await page.emulateTimezone('Asia/Kolkata');
 
         await page.goto('https://evisitor.rajasthan.gov.in/evisitor', { waitUntil: 'domcontentloaded' });
         if (auth_storage) {
