@@ -7,6 +7,8 @@ const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const https = require('https');
+let sharedBrowser = null;
+let browserStarting = null;
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
@@ -23,6 +25,43 @@ const PORT = process.env.PORT || 3000;
 app.get('/', (req, res) => {
     res.send('E-Visitor Automation Scraper is Active & Fast!');
 });
+
+async function getBrowser() {
+    if (sharedBrowser && sharedBrowser.isConnected()) {
+        return sharedBrowser;
+    }
+
+    if (browserStarting) {
+        return browserStarting;
+    }
+
+    browserStarting = puppeteer.launch({
+        args: [
+            ...chromium.args,
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--no-first-run',
+            '--disable-background-networking',
+            '--disable-default-apps',
+            '--disable-extensions',
+            '--disable-sync',
+            '--mute-audio'
+        ],
+        defaultViewport: {
+            width: 1280,
+            height: 800
+        },
+        executablePath: await chromium.executablePath(),
+        headless: true
+    });
+
+    sharedBrowser = await browserStarting;
+    browserStarting = null;
+
+    return sharedBrowser;
+}
 
 async function downloadImage(url, destPath) {
     if (!url) return false;
@@ -101,12 +140,12 @@ app.all('/scrape', async (req, res) => {
         }
 
         const htmlContent = await page.content();
-        await browser.close();
+        await page.close();
 
         return res.send(htmlContent);
 
     } catch (error) {
-        if (browser) await browser.close();
+        if (browser) await page.close();
         return res.status(500).json({ error: 'Automation Error: ' + error.message });
     }
 });
@@ -117,28 +156,11 @@ app.post('/login-evisitor', async (req, res) => {
     let browser = null;
 
     try {
-        browser = await puppeteer.launch({
-            args: [
-                ...chromium.args,
-                 "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                    "--disable-extensions",
-                    "--disable-background-networking",
-                    "--disable-background-timer-throttling",
-                    "--disable-renderer-backgrounding",
-                    "--disable-sync",
-                    "--no-first-run",
-                    "--no-zygote"
-            ],
-            defaultViewport: { width: 1280, height: 800 },
-            executablePath: await chromium.executablePath(),
-            headless: true,
-        });
+        browser = await getBrowser();
 
         const page = await browser.newPage();
 
+        await page.setCacheEnabled(true);
         await page.setRequestInterception(true);
 
         page.on("request", request => {
@@ -225,7 +247,7 @@ app.post('/login-evisitor', async (req, res) => {
         }
 
         if (toastData.message && !toastData.success) {
-            await browser.close();
+            await page.close();
             return res.status(400).json({
                 status: 'login_failed',
                 toast_message: toastData.message,
@@ -261,7 +283,7 @@ app.post('/login-evisitor', async (req, res) => {
             };
         });
 
-        await browser.close();
+        await page.close();
 
         return res.json({
             status: 'success',
@@ -273,7 +295,7 @@ app.post('/login-evisitor', async (req, res) => {
         });
 
     } catch (error) {
-        if (browser) await browser.close();
+        if (browser) await page.close();
         return res.status(500).json({
             status: 'error',
             message: error.message
@@ -294,28 +316,11 @@ app.post('/create-visitor', async (req, res) => {
     let updatedPersonIds = [];
 
     try {
-        browser = await puppeteer.launch({
-            args: [
-                ...chromium.args,
-                 "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--disable-extensions",
-                "--disable-background-networking",
-                "--disable-background-timer-throttling",
-                "--disable-renderer-backgrounding",
-                "--disable-sync",
-                "--no-first-run",
-                "--no-zygote"
-            ],
-            defaultViewport: { width: 1280, height: 800 },
-            executablePath: await chromium.executablePath(),
-            headless: true,
-        });
+        browser = await getBrowser();
 
         page = await browser.newPage(); // Assigned page here
 
+        await page.setCacheEnabled(true);
         await page.setRequestInterception(true);
 
         page.on("request", request => {
@@ -849,7 +854,7 @@ app.post('/create-visitor', async (req, res) => {
         } catch (e) {}
         
         tempFiles.forEach(f => { try { fs.unlinkSync(f); } catch (e) {} });
-        await browser.close();
+        await page.close();
 
         return res.json({ status: 'success', message: toastMessage, updated_person_ids: updatedPersonIds, });
 
@@ -870,7 +875,7 @@ app.post('/create-visitor', async (req, res) => {
             }
         }
 
-        if (browser) await browser.close();
+        if (browser) await page.close();
         
         return res.status(400).json({ 
             status: 'failed', 
