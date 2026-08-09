@@ -265,6 +265,7 @@ app.post('/create-visitor', async (req, res) => {
     let browser = null;
     let page = null; 
     let tempFiles = [];
+    let updatedPersonIds = [];
 
     try {
         browser = await puppeteer.launch({
@@ -477,7 +478,7 @@ app.post('/create-visitor', async (req, res) => {
                     return v || '';
                 }
 
-                async function selectComboByTarget(targetKeyword, fallbackIndex, optionText) {
+                async function selectComboByTarget(targetKeyword, fallbackIndex, optionText, useSecondOptionFallback = false) {
                     if (!optionText) return false;
                     const combos = Array.from(document.querySelectorAll('[role="combobox"]'));
                     
@@ -567,33 +568,26 @@ app.post('/create-visitor', async (req, res) => {
                         option.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
                         option.click();
                         await sleep(400);
-                    } else {
-                            // String match nahi mila
-                            // → 2nd option default select hoga
-                            const visibleOptions = Array.from(
-                                document.querySelectorAll('li[role="option"]')
-                            ).filter(o => {
-                                const rect = o.getBoundingClientRect();
-                                return rect.width > 0 && rect.height > 0;
-                            });
-                        
-                            if (visibleOptions.length >= 2) {
-                                const defaultOption = visibleOptions[1];
-                        
-                                console.log(
-                                    'String match nahi mila → 2nd option select:',
-                                    defaultOption.innerText.trim()
-                                );
-                        
-                                defaultOption.click();
-                        
-                                await sleep(200);
-                            } else if (visibleOptions.length === 1) {
-                                // Agar sirf ek option hai to wahi select
-                                visibleOptions[0].click();
-                                await sleep(200);
-                            }
+                    } else if (useSecondOptionFallback) {
+                        const visibleOptions = Array.from(
+                            document.querySelectorAll('li[role="option"]')
+                        ).filter(o => {
+                            const rect = o.getBoundingClientRect();
+                            return rect.width > 0 && rect.height > 0;
+                        });
+                    
+                        if (visibleOptions.length >= 2) {
+                            const defaultOption = visibleOptions[1];
+                    
+                            console.log(
+                                `No match for "${optionText}" → selecting 2nd option:`,
+                                defaultOption.innerText.trim()
+                            );
+                    
+                            defaultOption.click();
+                            await sleep(200);
                         }
+                    }
 
                     document.dispatchEvent(new KeyboardEvent('keydown', {
                         key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true
@@ -624,11 +618,21 @@ app.post('/create-visitor', async (req, res) => {
                 // }
 
                 if (g.state || g.stateCd) {
-                    await selectComboByTarget('stateCd', 3, g.state || g.stateCd); 
+                    await selectComboByTarget(
+                        'stateCd',
+                        3,
+                        g.state || g.stateCd,
+                        true
+                    );
                 }
-
+                
                 if (g.district || g.districtcd) {
-                    await selectComboByTarget('districtcd', 4, g.district || g.districtcd);
+                    await selectComboByTarget(
+                        'districtcd',
+                        4,
+                        g.district || g.districtcd,
+                        true
+                    );
                 }
 
                 const docType = g.document_type || g.documentType || g.id_type || g.type || '';
@@ -774,6 +778,10 @@ app.post('/create-visitor', async (req, res) => {
                 // YE ERROR THROW HOGA TOH CATCH BLOCK ME JAYEGA AUR SCREENSHOT LEGA
                 throw new Error(`Guest ${i + 1} (${guest.full_name || 'Guest'}) Add nahi ho paya: ${addResult.error}`);
             }
+            // Guest successfully Add ho gaya
+            if (guest.person_pk !== undefined && guest.person_pk !== null) {
+                updatedPersonIds.push(guest.person_pk);
+            }
         }
 
         console.log('All guests added successfully. TEST MODE: Submit nahi karna hai.');
@@ -815,6 +823,7 @@ return res.json({
     status: 'success',
     mode: 'TEST_ONLY_NO_SUBMIT',
     message: 'Dono guests Add ho gaye. Submit Check-In nahi kiya gaya.',
+    updated_person_ids: updatedPersonIds,
     screenshot: finalScreenshotBase64
         ? `data:image/png;base64,${finalScreenshotBase64}`
         : null
