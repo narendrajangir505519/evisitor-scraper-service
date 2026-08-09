@@ -60,14 +60,17 @@ app.all('/scrape', async (req, res) => {
         browser = await puppeteer.launch({
             args: [
                 ...chromium.args,
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-accelerated-2d-canvas',
-                '--disable-gpu',
-                '--no-first-run',
-                '--single-process',
-                '--no-zygote'
+                 "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-extensions",
+                "--disable-background-networking",
+                "--disable-background-timer-throttling",
+                "--disable-renderer-backgrounding",
+                "--disable-sync",
+                "--no-first-run",
+                "--no-zygote"
             ],
             defaultViewport: { width: 1280, height: 800 },
             executablePath: await chromium.executablePath(),
@@ -117,11 +120,17 @@ app.post('/login-evisitor', async (req, res) => {
         browser = await puppeteer.launch({
             args: [
                 ...chromium.args,
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--single-process',
+                 "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--disable-extensions",
+                    "--disable-background-networking",
+                    "--disable-background-timer-throttling",
+                    "--disable-renderer-backgrounding",
+                    "--disable-sync",
+                    "--no-first-run",
+                    "--no-zygote"
             ],
             defaultViewport: { width: 1280, height: 800 },
             executablePath: await chromium.executablePath(),
@@ -129,6 +138,23 @@ app.post('/login-evisitor', async (req, res) => {
         });
 
         const page = await browser.newPage();
+
+        await page.setRequestInterception(true);
+
+        page.on("request", request => {
+            const type = request.resourceType();
+        
+            if (
+                type === "image" ||
+                type === "font" ||
+                type === "media" ||
+                type === "stylesheet"
+            ) {
+                request.abort();
+            } else {
+                request.continue();
+            }
+        });
 
         console.log('Not logged in. Redirected to login page. Starting login automation...');
         await page.goto(loginBaseUrl, { waitUntil: 'networkidle2', timeout: 45000 });
@@ -271,12 +297,17 @@ app.post('/create-visitor', async (req, res) => {
         browser = await puppeteer.launch({
             args: [
                 ...chromium.args,
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--single-process',
-                '--no-zygote'
+                 "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-extensions",
+                "--disable-background-networking",
+                "--disable-background-timer-throttling",
+                "--disable-renderer-backgrounding",
+                "--disable-sync",
+                "--no-first-run",
+                "--no-zygote"
             ],
             defaultViewport: { width: 1280, height: 800 },
             executablePath: await chromium.executablePath(),
@@ -284,6 +315,23 @@ app.post('/create-visitor', async (req, res) => {
         });
 
         page = await browser.newPage(); // Assigned page here
+
+        await page.setRequestInterception(true);
+
+        page.on("request", request => {
+            const type = request.resourceType();
+        
+            if (
+                type === "image" ||
+                type === "font" ||
+                type === "media" ||
+                type === "stylesheet"
+            ) {
+                request.abort();
+            } else {
+                request.continue();
+            }
+        });
 
         await page.emulateTimezone('Asia/Kolkata');
 
