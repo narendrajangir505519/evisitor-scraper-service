@@ -737,7 +737,7 @@ app.post('/create-visitor', async (req, res) => {
                 addBtn.click();
 
                 for (let x = 0; x < 15; x++) {
-                    await sleep(100);
+                    await sleep(200);
                 
                     const errors = Array.from(
                         document.querySelectorAll(
