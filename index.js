@@ -270,14 +270,12 @@ app.post('/create-visitor', async (req, res) => {
         browser = await puppeteer.launch({
             args: [
                 ...chromium.args,
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
                 '--disable-gpu',
                 '--single-process',
-                '--no-zygote',
-                '--disable-background-networking',
-                '--disable-default-apps',
-                '--disable-extensions',
-                '--disable-sync',
-                '--mute-audio'
+                '--no-zygote'
             ],
             defaultViewport: { width: 1280, height: 800 },
             executablePath: await chromium.executablePath(),
@@ -285,20 +283,6 @@ app.post('/create-visitor', async (req, res) => {
         });
 
         page = await browser.newPage(); // Assigned page here
-
-        await page.setCacheEnabled(true);
-        
-        await page.setRequestInterception(true);
-        
-        page.on('request', req => {
-            const type = req.resourceType();
-        
-            if (['image', 'font', 'media'].includes(type)) {
-                req.abort();
-            } else {
-                req.continue();
-            }
-        });
 
         await page.emulateTimezone('Asia/Kolkata');
 
@@ -315,7 +299,7 @@ app.post('/create-visitor', async (req, res) => {
         }
 
         console.log('Navigating to Visitors Page...');
-        await page.goto(visitorsUrl, { waitUntil: 'networkidle2', timeout: 20000 });
+        await page.goto(visitorsUrl, { waitUntil: 'networkidle2', timeout: 35000 });
 
         if (page.url().includes('login') || !page.url().includes('/user/visitors')) {
             throw new Error('Session expire ho gaya hai ya invalid auth data hai.');
@@ -338,10 +322,7 @@ app.post('/create-visitor', async (req, res) => {
             throw new Error('Create Visitor / Check-In button nahi mila.');
         }
 
-        await page.waitForSelector(
-            'input[name="checkInDateTime"], input[name="roomNumber"], [role="combobox"]',
-            { timeout: 5000 }
-        ).catch(() => null);
+        await new Promise(r => setTimeout(r, 1500));
 
         console.log('Filling Booking Level Details...');
         const baseResult = await page.evaluate(async (bData) => {
@@ -376,8 +357,8 @@ app.post('/create-visitor', async (req, res) => {
                 const combo = combos[index] || combos[combos.length - 1];
                 if (!combo) return false;
 
-                combo.scrollIntoView({ block: 'center' });
-                await sleep(50);
+                combo.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                await sleep(300);
                 combo.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
                 combo.click();
 
@@ -385,7 +366,7 @@ app.post('/create-visitor', async (req, res) => {
                 const need = norm(optionText);
 
                 for (let attempt = 0; attempt < 10; attempt++) {
-                    await sleep(50);
+                    await sleep(300);
                     options = Array.from(document.querySelectorAll('li[role="option"]')).filter(o => {
                         const rect = o.getBoundingClientRect();
                         const isVisible = rect.width > 0 && rect.height > 0;
@@ -397,7 +378,7 @@ app.post('/create-visitor', async (req, res) => {
 
                 if (options.length === 0) {
                     document.body.click();
-                    await sleep(50);
+                    await sleep(300);
                     return false;
                 }
 
@@ -409,16 +390,16 @@ app.post('/create-visitor', async (req, res) => {
 
                 if (!option) {
                     document.body.click();
-                    await sleep(50);
+                    await sleep(300);
                     return false;
                 }
 
                 option.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                await sleep(30);
+                await sleep(200);
                 option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
                 option.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
                 option.click();
-                await sleep(80);
+                await sleep(500);
                 return true;
             }
 
@@ -525,11 +506,11 @@ app.post('/create-visitor', async (req, res) => {
                         const isDisabled = combo.hasAttribute('disabled') || combo.getAttribute('aria-disabled') === 'true';
                         
                         if (!isDisabled && !isMuiDisabled) break;
-                        await sleep(80);
+                        await sleep(500);
                     }
 
-                    combo.scrollIntoView({ block: 'center' });
-                    await sleep(60);
+                    combo.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    await sleep(400);
                     
                     const need = norm(optionText);
 
@@ -538,13 +519,13 @@ app.post('/create-visitor', async (req, res) => {
                         const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
                         if (setter) setter.call(combo, ''); else combo.value = '';
                         combo.dispatchEvent(new Event('input', { bubbles: true }));
-                        await sleep(50);
+                        await sleep(300);
                         
                         if (optionText.length > 2) {
                             const typeText = optionText.substring(0, 4);
                             if (setter) setter.call(combo, typeText); else combo.value = typeText;
                             combo.dispatchEvent(new Event('input', { bubbles: true }));
-                            await sleep(80); 
+                            await sleep(500); 
                         }
                     }
 
@@ -554,7 +535,7 @@ app.post('/create-visitor', async (req, res) => {
                     let option = null;
 
                     for (let attempt = 0; attempt < 30; attempt++) { 
-                        await sleep(80);
+                        await sleep(500);
                         
                         const options = Array.from(document.querySelectorAll('li[role="option"]')).filter(o => {
                             const rect = o.getBoundingClientRect();
@@ -581,28 +562,28 @@ app.post('/create-visitor', async (req, res) => {
 
                     if (option) {
                         option.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        await sleep(30);
+                        await sleep(200);
                         option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
                         option.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
                         option.click();
-                        await sleep(60);
+                        await sleep(400);
                     } else if (combo.tagName === 'INPUT') {
                         const firstOption = document.querySelector('li[role="option"]');
                         if (firstOption && firstOption.getBoundingClientRect().width > 0) {
                             firstOption.click();
-                            await sleep(60);
+                            await sleep(400);
                         }
                     }
 
                     document.dispatchEvent(new KeyboardEvent('keydown', {
                         key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true
                     }));
-                    await sleep(50);
+                    await sleep(300);
                     document.body.click();
                     
                     for (let i = 0; i < 10; i++) {
                         if (!document.querySelector('ul[role="listbox"]')) break;
-                        await sleep(30);
+                        await sleep(200);
                     }
 
                     return !!option; 
@@ -643,7 +624,7 @@ app.post('/create-visitor', async (req, res) => {
                     const docNum = g.document_number || g.documentNumber || g.id_number || g.doc_number;
                     if (docNum) {
                         setDocumentNumber(docNum);
-                        await sleep(80);
+                        await sleep(500);
                     }
                 }
 
@@ -737,7 +718,7 @@ app.post('/create-visitor', async (req, res) => {
                 addBtn.click();
 
                 for (let x = 0; x < 15; x++) {
-                    await sleep(200);
+                    await sleep(100);
                 
                     const errors = Array.from(
                         document.querySelectorAll(
@@ -754,6 +735,9 @@ app.post('/create-visitor', async (req, res) => {
                                 [...new Set(errors)].join(' | ')
                         };
                     }
+                
+                    // Agar error nahi hai aur Add ke baad form reset ho gaya
+                    // to process continue kar sakte hain.
                 }
 
                 const errors = Array.from(document.querySelectorAll('.Mui-error, .MuiFormHelperText-root.Mui-error'))
@@ -773,7 +757,6 @@ app.post('/create-visitor', async (req, res) => {
         }
 
         console.log('Submitting Final Check-In...');
-        await sleep(2000);
         await page.evaluate(() => {
             const buttons = Array.from(document.querySelectorAll('button'));
             const submitBtn = buttons.find(b => {
