@@ -286,32 +286,6 @@ app.post('/create-visitor', async (req, res) => {
 
         await page.emulateTimezone('Asia/Kolkata');
 
-        page.on('request', request => {
-    if (request.url().includes('/esa-ingestion/addVisitorV1')) {
-        console.log('\n========== ADD VISITOR API ==========');
-        console.log('URL:', request.url());
-        console.log('METHOD:', request.method());
-        console.log('HEADERS:', request.headers());
-        console.log('BODY:', request.postData());
-        console.log('====================================\n');
-    }
-});
-
-page.on('response', async response => {
-    if (response.url().includes('/esa-ingestion/addVisitorV1')) {
-        console.log('\n========== ADD VISITOR RESPONSE ==========');
-        console.log('STATUS:', response.status());
-
-        try {
-            console.log('RESPONSE:', await response.text());
-        } catch (e) {
-            console.log('Response read error:', e.message);
-        }
-
-        console.log('==========================================\n');
-    }
-});
-
         await page.goto('https://evisitor.rajasthan.gov.in/evisitor', { waitUntil: 'domcontentloaded' });
         if (auth_storage) {
             await page.evaluate((storage) => {
