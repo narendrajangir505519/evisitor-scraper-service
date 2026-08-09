@@ -618,6 +618,7 @@ page.on('response', async response => {
                 setInputByName('name', g.full_name || g.name || g.guest_name);
                 setInputByName('mobileNumber', g.mobile_number || g.mobile);
                 setInputByName('address', g.address);
+                setInputByName('dateOfBirth', g.dateOfBirth);
 
                 if (g.gender) {
                     await selectComboByTarget('gender', 1, getGender(g.gender));
