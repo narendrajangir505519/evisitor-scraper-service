@@ -27,12 +27,25 @@ app.get('/', (req, res) => {
 });
 
 async function getBrowser() {
-    if (sharedBrowser && sharedBrowser.isConnected()) {
-        return sharedBrowser;
+
+    // Agar browser already available hai
+    if (sharedBrowser) {
+        try {
+            // Browser alive hai ya nahi check
+            const pages = await sharedBrowser.pages();
+
+            if (pages) {
+                return sharedBrowser;
+            }
+        } catch (e) {
+            console.log('Old browser disconnected, creating new browser...');
+            sharedBrowser = null;
+        }
     }
 
+    // Agar already browser start ho raha hai
     if (browserStarting) {
-        return browserStarting;
+        return await browserStarting;
     }
 
     browserStarting = puppeteer.launch({
@@ -57,10 +70,12 @@ async function getBrowser() {
         headless: true
     });
 
-    sharedBrowser = await browserStarting;
-    browserStarting = null;
-
-    return sharedBrowser;
+    try {
+        sharedBrowser = await browserStarting;
+        return sharedBrowser;
+    } finally {
+        browserStarting = null;
+    }
 }
 
 async function downloadImage(url, destPath) {
