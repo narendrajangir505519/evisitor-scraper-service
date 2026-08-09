@@ -157,17 +157,17 @@ app.post('/login-evisitor', async (req, res) => {
         });
 
         console.log('Not logged in. Redirected to login page. Starting login automation...');
-        await page.goto(loginBaseUrl, { waitUntil: 'networkidle2', timeout: 45000 });
+        await page.goto(loginBaseUrl, { waitUntil: 'networkidle2', timeout: 20000 });
 
         const topLoginBtn = await page.$('button.login-btn');
         if (topLoginBtn) {
             await topLoginBtn.click();
         }
 
-        await page.waitForSelector('input[placeholder="Enter SSO ID"]', { timeout: 15000 });
+        await page.waitForSelector('input[placeholder="Enter SSO ID"]', { timeout: 10000 });
 
         try {
-            await page.waitForSelector('.css-uayl0r', { timeout: 8000 });
+            await page.waitForSelector('.css-uayl0r', { timeout: 3000 });
         } catch (e) {
             console.log('Captcha selector wait timeout, evaluating DOM...');
         }
@@ -211,7 +211,7 @@ app.post('/login-evisitor', async (req, res) => {
 
         let toastData = { success: false, message: '' };
         try {
-            await page.waitForSelector('.Toastify__toast', { timeout: 8000 });
+            await page.waitForSelector('.Toastify__toast', { timeout: 3000 });
             toastData = await page.evaluate(() => {
                 const toastEl = document.querySelector('.Toastify__toast');
                 if (!toastEl) return { success: false, message: '' };
@@ -233,7 +233,7 @@ app.post('/login-evisitor', async (req, res) => {
             });
         }
 
-        await page.waitForFunction(() => !document.querySelector('.login-card'), { timeout: 15000 }).catch(() => null);
+        await page.waitForFunction(() => !document.querySelector('.login-card'), { timeout: 10000 }).catch(() => null);
         await new Promise(resolve => setTimeout(resolve, 4000));
 
         const nextPageHtml = await page.content();
@@ -348,7 +348,7 @@ app.post('/create-visitor', async (req, res) => {
         }
 
         console.log('Navigating to Visitors Page...');
-        await page.goto(visitorsUrl, { waitUntil: 'networkidle2', timeout: 35000 });
+        await page.goto(visitorsUrl, { waitUntil: 'networkidle2', timeout: 20000 });
 
         if (page.url().includes('login') || !page.url().includes('/user/visitors')) {
             throw new Error('Session expire ho gaya hai ya invalid auth data hai.');
@@ -371,7 +371,7 @@ app.post('/create-visitor', async (req, res) => {
             throw new Error('Create Visitor / Check-In button nahi mila.');
         }
 
-        await new Promise(r => setTimeout(r, 1500));
+        await new Promise(r => setTimeout(r, 1000));
 
         console.log('Filling Booking Level Details...');
         const baseResult = await page.evaluate(async (bData) => {
@@ -415,7 +415,7 @@ app.post('/create-visitor', async (req, res) => {
                 const need = norm(optionText);
 
                 for (let attempt = 0; attempt < 10; attempt++) {
-                    await sleep(300);
+                    await sleep(50);
                     options = Array.from(document.querySelectorAll('li[role="option"]')).filter(o => {
                         const rect = o.getBoundingClientRect();
                         const isVisible = rect.width > 0 && rect.height > 0;
@@ -439,16 +439,16 @@ app.post('/create-visitor', async (req, res) => {
 
                 if (!option) {
                     document.body.click();
-                    await sleep(300);
+                    await sleep(50);
                     return false;
                 }
 
                 option.scrollIntoView({ behavior: 'instant', block: 'center' });
-                await sleep(200);
+                await sleep(30);
                 option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
                 option.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
                 option.click();
-                await sleep(500);
+                await sleep(80);
                 return true;
             }
 
@@ -559,7 +559,7 @@ app.post('/create-visitor', async (req, res) => {
                     }
 
                     combo.scrollIntoView({ behavior: 'instant', block: 'center' });
-                    await sleep(400);
+                    await sleep(60);
                     
                     const need = norm(optionText);
 
@@ -574,7 +574,7 @@ app.post('/create-visitor', async (req, res) => {
                             const typeText = optionText.substring(0, 4);
                             if (setter) setter.call(combo, typeText); else combo.value = typeText;
                             combo.dispatchEvent(new Event('input', { bubbles: true }));
-                            await sleep(500); 
+                            await sleep(80); 
                         }
                     }
 
@@ -611,11 +611,11 @@ app.post('/create-visitor', async (req, res) => {
 
                     if (option) {
                         option.scrollIntoView({ behavior: 'instant', block: 'center' });
-                        await sleep(200);
+                        await sleep(30);
                         option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
                         option.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
                         option.click();
-                        await sleep(400);
+                        await sleep(60);
                     } else if (useSecondOptionFallback) {
                         const visibleOptions = Array.from(
                             document.querySelectorAll('li[role="option"]')
@@ -633,19 +633,19 @@ app.post('/create-visitor', async (req, res) => {
                             );
                     
                             defaultOption.click();
-                            await sleep(200);
+                            await sleep(30);
                         }
                     }
 
                     document.dispatchEvent(new KeyboardEvent('keydown', {
                         key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true
                     }));
-                    await sleep(300);
+                    await sleep(50);
                     document.body.click();
                     
                     for (let i = 0; i < 10; i++) {
                         if (!document.querySelector('ul[role="listbox"]')) break;
-                        await sleep(200);
+                        await sleep(30);
                     }
 
                     return !!option; 
@@ -662,7 +662,7 @@ app.post('/create-visitor', async (req, res) => {
 
                 // if (g.nationality) {
                 //     await selectComboByTarget('nationality', 2, g.nationality);
-                //     await sleep(500);
+                //     await sleep(80);
                 // }
 
                 if (g.state || g.stateCd) {
@@ -696,7 +696,7 @@ app.post('/create-visitor', async (req, res) => {
                     const docNum = g.document_number || g.documentNumber || g.id_number || g.doc_number;
                     if (docNum) {
                         setDocumentNumber(docNum);
-                        await sleep(500);
+                        await sleep(80);
                     }
                 }
 
@@ -844,7 +844,7 @@ app.post('/create-visitor', async (req, res) => {
 
         let toastMessage = 'Visitor check-in submitted successfully.';
         try {
-            await page.waitForSelector('.Toastify__toast', { timeout: 8000 });
+            await page.waitForSelector('.Toastify__toast', { timeout: 2000 });
             toastMessage = await page.evaluate(() => document.querySelector('.Toastify__toast')?.innerText.trim() || 'Submitted');
         } catch (e) {}
         
