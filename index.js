@@ -735,7 +735,7 @@ app.post('/create-visitor', async (req, res) => {
                 if (!addBtn) return { success: false, error: '"Add" button nahi mila.' };
 
                 addBtn.click();
-await sleep(500);
+
                 for (let x = 0; x < 15; x++) {
                     await sleep(100);
                 
@@ -773,6 +773,7 @@ await sleep(500);
         }
 
         console.log('Submitting Final Check-In...');
+        await sleep(2000);
         await page.evaluate(() => {
             const buttons = Array.from(document.querySelectorAll('button'));
             const submitBtn = buttons.find(b => {
