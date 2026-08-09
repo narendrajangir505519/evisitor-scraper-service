@@ -561,19 +561,39 @@ app.post('/create-visitor', async (req, res) => {
                     }
 
                     if (option) {
-                        option.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        option.scrollIntoView({ behavior: 'instant', block: 'center' });
                         await sleep(200);
                         option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
                         option.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
                         option.click();
                         await sleep(400);
-                    } else if (combo.tagName === 'INPUT') {
-                        const firstOption = document.querySelector('li[role="option"]');
-                        if (firstOption && firstOption.getBoundingClientRect().width > 0) {
-                            firstOption.click();
-                            await sleep(400);
+                    } else {
+                            // String match nahi mila
+                            // → 2nd option default select hoga
+                            const visibleOptions = Array.from(
+                                document.querySelectorAll('li[role="option"]')
+                            ).filter(o => {
+                                const rect = o.getBoundingClientRect();
+                                return rect.width > 0 && rect.height > 0;
+                            });
+                        
+                            if (visibleOptions.length >= 2) {
+                                const defaultOption = visibleOptions[1];
+                        
+                                console.log(
+                                    'String match nahi mila → 2nd option select:',
+                                    defaultOption.innerText.trim()
+                                );
+                        
+                                defaultOption.click();
+                        
+                                await sleep(200);
+                            } else if (visibleOptions.length === 1) {
+                                // Agar sirf ek option hai to wahi select
+                                visibleOptions[0].click();
+                                await sleep(200);
+                            }
                         }
-                    }
 
                     document.dispatchEvent(new KeyboardEvent('keydown', {
                         key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true
