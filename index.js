@@ -358,7 +358,7 @@ app.post('/create-visitor', async (req, res) => {
                 const combo = combos[index] || combos[combos.length - 1];
                 if (!combo) return false;
 
-                combo.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                combo.scrollIntoView({ behavior: 'instant', block: 'center' });
                 await sleep(300);
                 combo.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
                 combo.click();
@@ -395,7 +395,7 @@ app.post('/create-visitor', async (req, res) => {
                     return false;
                 }
 
-                option.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                option.scrollIntoView({ behavior: 'instant', block: 'center' });
                 await sleep(200);
                 option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
                 option.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
@@ -510,7 +510,7 @@ app.post('/create-visitor', async (req, res) => {
                         await sleep(500);
                     }
 
-                    combo.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    combo.scrollIntoView({ behavior: 'instant', block: 'center' });
                     await sleep(400);
                     
                     const need = norm(optionText);
@@ -784,50 +784,26 @@ app.post('/create-visitor', async (req, res) => {
             }
         }
 
-        console.log('All guests added successfully. TEST MODE: Submit nahi karna hai.');
+        console.log('Submitting Final Check-In...');
+        await page.evaluate(() => {
+            const buttons = Array.from(document.querySelectorAll('button'));
+            const submitBtn = buttons.find(b => {
+                const txt = b.textContent.trim();
+                return txt.includes('Submit Check-In') || txt === 'Submit';
+            });
+            if (submitBtn) submitBtn.click();
+        });
 
-// Thoda wait taaki UI completely render/reset ho jaye
-await new Promise(resolve => setTimeout(resolve, 1000));
+        let toastMessage = 'Visitor check-in submitted successfully.';
+        try {
+            await page.waitForSelector('.Toastify__toast', { timeout: 8000 });
+            toastMessage = await page.evaluate(() => document.querySelector('.Toastify__toast')?.innerText.trim() || 'Submitted');
+        } catch (e) {}
+        
+        tempFiles.forEach(f => { try { fs.unlinkSync(f); } catch (e) {} });
+        await browser.close();
 
-// Screenshot lo
-let finalScreenshotBase64 = null;
-
-try {
-    console.log('Final screenshot capture kar rahe hain...');
-
-    finalScreenshotBase64 = await page.screenshot({
-        encoding: 'base64',
-        fullPage: true
-    });
-
-    console.log('Screenshot successfully captured.');
-} catch (screenshotError) {
-    console.error('Screenshot capture failed:', screenshotError);
-}
-
-// Temporary files delete
-tempFiles.forEach(f => {
-    try {
-        fs.unlinkSync(f);
-    } catch (e) {}
-});
-
-// Browser close
-if (browser) {
-    await browser.close();
-}
-
-// IMPORTANT:
-// Submit Check-In intentionally nahi kiya ja raha.
-return res.json({
-    status: 'success',
-    mode: 'TEST_ONLY_NO_SUBMIT',
-    message: 'Dono guests Add ho gaye. Submit Check-In nahi kiya gaya.',
-    updated_person_ids: updatedPersonIds,
-    screenshot: finalScreenshotBase64
-        ? `data:image/png;base64,${finalScreenshotBase64}`
-        : null
-});
+        return res.json({ status: 'success', message: toastMessage, updated_person_ids: updatedPersonIds, });
 
     } catch (error) {
         // ERROR AANE PAR YAHAN AAYEGA
