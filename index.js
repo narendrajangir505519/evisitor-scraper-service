@@ -735,7 +735,7 @@ app.post('/create-visitor', async (req, res) => {
                 if (!addBtn) return { success: false, error: '"Add" button nahi mila.' };
 
                 addBtn.click();
-
+await sleep(500);
                 for (let x = 0; x < 15; x++) {
                     await sleep(100);
                 
@@ -754,9 +754,6 @@ app.post('/create-visitor', async (req, res) => {
                                 [...new Set(errors)].join(' | ')
                         };
                     }
-                
-                    // Agar error nahi hai aur Add ke baad form reset ho gaya
-                    // to process continue kar sakte hain.
                 }
 
                 const errors = Array.from(document.querySelectorAll('.Mui-error, .MuiFormHelperText-root.Mui-error'))
