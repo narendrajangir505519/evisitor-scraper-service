@@ -981,7 +981,7 @@ async function processCreateVisitor(auth_storage, booking_data) {
         tempFiles.forEach(f => { try { fs.unlinkSync(f); } catch (e) {} });
         await page.close();
 
-        return res.json({ status: 'success', message: toastMessage, updated_person_ids: updatedPersonIds, });
+        return { status: 'success', message: toastMessage, updated_person_ids: updatedPersonIds, };
 
     } catch (error) {
         // ERROR AANE PAR YAHAN AAYEGA
@@ -1006,12 +1006,12 @@ async function processCreateVisitor(auth_storage, booking_data) {
         browser = null;
         page = null;
         
-        return res.status(400).json({ 
+        return { 
             status: 'failed', 
             message: error.message +' || '+ new Date().toString(),
             // JSON ME BASE64 IMAGE BHEJ RAHE HAI
             error_screenshot: errorScreenshotBase64 ? `data:image/png;base64,${errorScreenshotBase64}` : null 
-        });
+        };
     }
 };
 
