@@ -328,7 +328,7 @@ app.post('/create-visitor', async (req, res) => {
     let browser = null;
     let page = null; 
     let tempFiles = [];
-    let updatedPersonIds = [];
+    const updatedPersonIds = [];
 
     try {
         browser = await getBrowser();
