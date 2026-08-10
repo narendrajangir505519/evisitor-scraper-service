@@ -1000,7 +1000,11 @@ async function processCreateVisitor(auth_storage, booking_data) {
             }
         }
 
-        if (browser) await page.close();
+        //if (browser) await page.close();
+        await safeCloseBrowser(browser, page);
+
+        browser = null;
+        page = null;
         
         return res.status(400).json({ 
             status: 'failed', 
@@ -1010,6 +1014,27 @@ async function processCreateVisitor(auth_storage, booking_data) {
         });
     }
 };
+
+async function safeCloseBrowser(browser, page) {
+    // Page ko manually close mat karo.
+    // Sirf browser close karo.
+    // Browser close karte waqt Puppeteer internally pages ko handle karega.
+
+    if (!browser) {
+        return;
+    }
+
+    try {
+        if (typeof browser.isConnected === 'function' && browser.isConnected()) {
+            await browser.close();
+        }
+    } catch (error) {
+        console.log(
+            'Browser cleanup ignored:',
+            error?.message || error
+        );
+    }
+}
 
 app.post('/create-visitor', async (req, res) => {
 
