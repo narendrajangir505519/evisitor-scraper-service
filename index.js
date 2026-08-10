@@ -26,6 +26,117 @@ app.get('/', (req, res) => {
     res.send('E-Visitor Automation Scraper is Active & Fast!');
 });
 
+async function sendCallback(callbackUrl, payload) {
+    if (!callbackUrl) {
+        console.log('callback_url nahi diya gaya.');
+        return false;
+    }
+
+    try {
+        console.log('Callback sending:', callbackUrl);
+
+        const response = await axiosInstance.post(
+            callbackUrl,
+            payload,
+            {
+                timeout: 15000,
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                maxContentLength: Infinity,
+                maxBodyLength: Infinity
+            }
+        );
+
+        console.log(
+            'Callback success:',
+            response.status,
+            response.data
+        );
+
+        return true;
+
+    } catch (error) {
+        console.error(
+            'Callback failed:',
+            error.message
+        );
+
+        if (error.response) {
+            console.error(
+                'Callback response:',
+                error.response.status,
+                error.response.data
+            );
+        }
+
+        return false;
+    }
+}
+
+function startCreateVisitorBackground(auth_storage, booking_data, callback_url) {
+
+    setImmediate(async () => {
+
+        try {
+
+            console.log('BACKGROUND CREATE VISITOR STARTED');
+
+            const result = await processCreateVisitor(
+                auth_storage,
+                booking_data
+            );
+
+            console.log(
+                'Background process completed:',
+                result.status
+            );
+
+            if (callback_url) {
+
+                await sendCallback(
+                    callback_url,
+                    {
+                        status: result.status,
+                        message: result.message || '',
+                        updated_person_ids: result.updated_person_ids || [],
+                        screenshot: result.screenshot || null,
+                        error_screenshot: result.error_screenshot || null,
+                        timestamp: new Date().toISOString()
+                    }
+                );
+
+            }
+
+        } catch (error) {
+
+            console.error(
+                'Background process fatal error:',
+                error
+            );
+
+            if (callback_url) {
+
+                await sendCallback(
+                    callback_url,
+                    {
+                        status: 'failed',
+                        message: error.message || 'Background automation failed',
+                        updated_person_ids: [],
+                        screenshot: null,
+                        error_screenshot: null,
+                        timestamp: new Date().toISOString()
+                    }
+                );
+
+            }
+
+        }
+
+    });
+
+}
+
 async function getBrowser() {
 
     // Agar browser already available hai
@@ -320,8 +431,7 @@ app.post('/login-evisitor', async (req, res) => {
 
 
 // CREATE VISITOR AUTOMATION ENDPOINT
-app.post('/create-visitor', async (req, res) => {
-    const { auth_storage, booking_data } = req.body;
+async function processCreateVisitor(auth_storage, booking_data) {
     const visitorsUrl = 'https://evisitor.rajasthan.gov.in/evisitor/user/visitors';
     
     // VARIABLES MOVED TO OUTER SCOPE FOR SCREENSHOT ACCESS
@@ -899,6 +1009,122 @@ app.post('/create-visitor', async (req, res) => {
             error_screenshot: errorScreenshotBase64 ? `data:image/png;base64,${errorScreenshotBase64}` : null 
         });
     }
+};
+
+app.post('/create-visitor', async (req, res) => {
+
+    try {
+
+        const {
+            auth_storage,
+            booking_data,
+            callback_url
+        } = req.body;
+
+
+        if (!booking_data) {
+
+            return res.status(400).json({
+
+                status: 'failed',
+
+                message:
+                    'booking_data required hai.'
+
+            });
+
+        }
+
+
+        if (
+            !booking_data.guests ||
+            !Array.isArray(booking_data.guests) ||
+            booking_data.guests.length === 0
+        ) {
+
+            return res.status(400).json({
+
+                status: 'failed',
+
+                message:
+                    'booking_data.guests empty hai.'
+
+            });
+
+        }
+
+
+        console.log(
+            'Create visitor request received.'
+        );
+
+
+        console.log(
+            'Guests:',
+            booking_data.guests.length
+        );
+
+
+        console.log(
+            'Callback:',
+            callback_url || 'Not provided'
+        );
+
+
+        // ------------------------------------------
+        // BACKGROUND START
+        // ------------------------------------------
+
+        startCreateVisitorBackground(
+            auth_storage,
+            booking_data,
+            callback_url
+        );
+
+
+        // ------------------------------------------
+        // IMMEDIATE RESPONSE
+        // ------------------------------------------
+
+        return res.status(202).json({
+
+            status: 'processing',
+
+            message:
+                'Visitor automation background mein start ho gayi hai.',
+
+            callback_enabled:
+                !!callback_url,
+
+            guests:
+                booking_data.guests.length,
+
+            timestamp:
+                new Date().toISOString()
+
+        });
+
+
+    } catch (error) {
+
+        console.error(
+            'Create visitor request error:',
+            error.message
+        );
+
+
+        return res.status(500).json({
+
+            status: 'failed',
+
+            message:
+                error.message ||
+                'Unable to start visitor automation.'
+
+        });
+
+    }
+
 });
 
 app.listen(PORT, () => {
