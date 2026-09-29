@@ -528,11 +528,27 @@ async function processCreateVisitor(auth_storage, booking_data, sso_credentials)
             }
 
             // 7. CLICK 'Add' BUTTON
-            console.log(`Clicking 'Add' button for Guest ${i + 1}...`);
-            const addBtn = page.locator('button:has-text("Add")').first();
-            await addBtn.click();
+            console.log(`Clicking exact 'Add' button for Guest ${i + 1}...`);
 
-            // Wait for validation errors or successful list insertion
+            // MuiButton-colorSuccess class aur exact 'Add' text se target karein
+            const addBtn = page.locator('button.MuiButton-colorSuccess, button.MuiButton-containedSuccess', { 
+                hasText: /^Add$/ 
+            }).first();
+
+            await addBtn.waitFor({ state: 'visible', timeout: 10000 });
+            await addBtn.scrollIntoViewIfNeeded();
+
+            // Direct DOM Click (Overlay/Backdrop safe)
+            await page.evaluate(() => {
+                const buttons = Array.from(document.querySelectorAll('button.MuiButton-colorSuccess, button.MuiButton-containedSuccess'));
+                const btn = buttons.find(b => b.textContent.trim() === 'Add');
+                if (btn) btn.click();
+            });
+
+            // Playwright click with force fallback
+            await addBtn.click({ force: true, timeout: 3000 }).catch(() => null);
+
+            // Validation check (Wait up to 3 seconds for any errors)
             await page.waitForTimeout(600);
             const errorHelper = page.locator('.Mui-error, .MuiFormHelperText-root.Mui-error');
             const errCount = await errorHelper.count();
@@ -547,7 +563,7 @@ async function processCreateVisitor(auth_storage, booking_data, sso_credentials)
             if (guest.person_pk) {
                 updatedPersonIds.push(guest.person_pk);
             }
-            console.log(`Guest ${i + 1} added to table successfully.`);
+            console.log(`Guest ${i + 1} successfully added.`);
         }
 
         // 8. FINAL CHECK-IN SUBMIT
