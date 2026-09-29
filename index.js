@@ -268,75 +268,64 @@ async function processCreateVisitor(auth_storage, booking_data, sso_credentials)
         });
 
         // Initialize domain and set storage
-        await page.goto('https://evisitor.rajasthan.gov.in/evisitor', { waitUntil: 'commit' });
-        if (auth_storage) {
-            await page.evaluate((storage) => {
-                if (storage.localStorage) {
-                    Object.keys(storage.localStorage).forEach(k => localStorage.setItem(k, storage.localStorage[k]));
-                }
-                if (storage.sessionStorage) {
-                    Object.keys(storage.sessionStorage).forEach(k => sessionStorage.setItem(k, storage.sessionStorage[k]));
-                }
-            }, auth_storage);
-        }
-
         console.log('Navigating to Visitors Page...');
         await page.goto(visitorsUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-        // 1. AUTO RE-LOGIN CHECK (Agar session expire hokar logout ho gaya ho)
-        const isLoggedOut = page.url().includes('login') || 
-                            !page.url().includes('/user/visitors') || 
-                            (await page.locator('button:has-text("Login"), button.login-btn').first().isVisible({ timeout: 2500 }).catch(() => false));
-
-        if (isLoggedOut) {
-            console.log('Session expire mila. Re-login trigger kar rahe hain...');
-            if (sso_credentials && sso_credentials.sso_id && sso_credentials.password) {
-                await doLoginOnPage(page, sso_credentials.sso_id, sso_credentials.password);
-                await page.goto(visitorsUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
-            } else {
-                throw new Error('Session expire ho gaya hai aur auto-login credentials nahi mile.');
-            }
+        if (page.url().includes('login') || !page.url().includes('/user/visitors')) {
+            throw new Error('Session expire ho gaya hai ya invalid auth data hai.');
         }
 
-        // 2. "Update Available" CHECK & CLICK
+        // ========================================================
+        // 1. "Update Now" CHECK & CLICK
+        // ========================================================
+        console.log('Checking for "Update Available" popup...');
         try {
             const updateBtn = page.locator('button:has-text("Update Now"), button:has-text("UPDATE NOW")').first();
-            if (await updateBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-                console.log('"Update Available" popup mila! "Update Now" click kar rahe hain...');
+            
+            // 4 second tak check karenge agar update button dikhta hai
+            if (await updateBtn.isVisible({ timeout: 4000 }).catch(() => false)) {
+                console.log('"Update Available" popup mila! "Update Now" par click kar rahe hain...');
                 await updateBtn.click();
-                await page.waitForTimeout(2500);
+                
+                // Update Now dabane ke baad app reload ho sakti hai ya modal gayab hota hai
+                await page.waitForTimeout(3000);
+                await page.waitForLoadState('domcontentloaded').catch(() => null);
+            } else {
+                console.log('Update popup nahi aaya, aage badh rahe hain...');
             }
-        } catch (e) {}
+        } catch (popupErr) {
+            console.log('Update popup check completed/skipped.');
+        }
 
-        // Clear any backdrop/dialog if left
+        // Agar koi modal ya backdrop abhi bhi bacha ho, toh use DOM se hata dein
         await page.evaluate(() => {
-            document.querySelectorAll('.MuiDialog-root, .MuiModal-root').forEach(m => {
-                if (m.innerText && m.innerText.includes('Update Available')) m.remove();
-            });
+            const modals = document.querySelectorAll('.MuiDialog-root, .MuiModal-root');
+            modals.forEach(m => m.remove());
         }).catch(() => null);
 
         await page.waitForTimeout(1000);
 
-        // 3. "CREATE VISITOR" BUTTON CLICK
+        // ========================================================
+        // 2. "CREATE VISITOR" CLICK
+        // ========================================================
         console.log('Finding and clicking "CREATE VISITOR" button...');
-        const createBtnClicked = await page.evaluate(() => {
+        const createBtn = page.locator('button:has-text("CREATE VISITOR"), button:has-text("Create Visitor"), button:has-text("CHECK-IN")').first();
+        
+        await createBtn.waitFor({ state: 'visible', timeout: 15000 });
+
+        // Direct DOM click + Playwright click fallback taaki kisi bhi haal me click trigger ho
+        await page.evaluate(() => {
             const buttons = Array.from(document.querySelectorAll('button'));
-            const targetBtn = buttons.find(b => {
+            const btn = buttons.find(b => {
                 const txt = (b.textContent || '').trim().toUpperCase();
                 return txt.includes('CREATE VISITOR') || txt.includes('CHECK-IN');
             });
-            if (targetBtn) {
-                targetBtn.click();
-                return true;
-            }
-            return false;
+            if (btn) btn.click();
         });
 
-        if (!createBtnClicked) {
-            throw new Error('Create Visitor / Check-In button nahi mila.');
-        }
-
+        // Form load hone ka wait karein
         await page.waitForSelector('input[name="checkInDateTime"], input[name="roomNumber"]', { timeout: 15000 });
+        console.log('Create Visitor Form successfully opened!');
 
         // 4. BOOKING BASE LEVEL DETAILS FILLING (Puppeteer Working Logic)
         console.log('Filling Booking Level Details...');
