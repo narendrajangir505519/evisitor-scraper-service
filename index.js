@@ -429,13 +429,19 @@ async function processCreateVisitor(auth_storage, booking_data, sso_credentials)
             if (downloadedPaths.length > 0) {
                 const fileInputs = page.locator('input[type="file"]');
                 const count = await fileInputs.count();
+
                 if (count > 0) {
-                    if (count >= downloadedPaths.length && count > 1) {
-                        for (let fIdx = 0; fIdx < downloadedPaths.length; fIdx++) {
-                            await fileInputs.nth(fIdx).setInputFiles(downloadedPaths[fIdx]);
-                        }
+                    if (count === 1) {
+                        // Agar portal par sirf 1 input hai, toh single file pass karein
+                        console.log('Single file input mila. Primary document upload kar rahe hain...');
+                        await fileInputs.first().setInputFiles(downloadedPaths[0]);
+                        await page.waitForTimeout(800);
                     } else {
-                        await fileInputs.first().setInputFiles(downloadedPaths);
+                        // Agar Front & Back ke 2 alag-alag inputs hain
+                        for (let fIdx = 0; fIdx < count && fIdx < downloadedPaths.length; fIdx++) {
+                            await fileInputs.nth(fIdx).setInputFiles(downloadedPaths[fIdx]);
+                            await page.waitForTimeout(800);
+                        }
                     }
                 }
             }
