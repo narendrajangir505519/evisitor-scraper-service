@@ -240,54 +240,67 @@ async function processCreateVisitor(auth_storage, booking_data) {
         });
 
         // Domain initialize aur storage inject karein
-        await page.goto('https://evisitor.rajasthan.gov.in/evisitor', { waitUntil: 'commit' });
-        if (auth_storage) {
-            await page.evaluate((storage) => {
-                if (storage.localStorage) {
-                    Object.keys(storage.localStorage).forEach(k => localStorage.setItem(k, storage.localStorage[k]));
-                }
-                if (storage.sessionStorage) {
-                    Object.keys(storage.sessionStorage).forEach(k => sessionStorage.setItem(k, storage.sessionStorage[k]));
-                }
-            }, auth_storage);
-        }
-
         console.log('Navigating to Visitors Page...');
-        await page.goto(visitorsUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+        await page.goto(visitorsUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
         if (page.url().includes('login') || !page.url().includes('/user/visitors')) {
             throw new Error('Session expire ho gaya hai ya invalid auth data hai.');
         }
 
-        await page.waitForTimeout(1500);
+        // ========================================================
+        // 1. "Update Now" CHECK & CLICK
+        // ========================================================
+        console.log('Checking for "Update Available" popup...');
+        try {
+            const updateBtn = page.locator('button:has-text("Update Now"), button:has-text("UPDATE NOW")').first();
+            
+            // 4 second tak check karenge agar update button dikhta hai
+            if (await updateBtn.isVisible({ timeout: 4000 }).catch(() => false)) {
+                console.log('"Update Available" popup mila! "Update Now" par click kar rahe hain...');
+                await updateBtn.click();
+                
+                // Update Now dabane ke baad app reload ho sakti hai ya modal gayab hota hai
+                await page.waitForTimeout(3000);
+                await page.waitForLoadState('domcontentloaded').catch(() => null);
+            } else {
+                console.log('Update popup nahi aaya, aage badh rahe hain...');
+            }
+        } catch (popupErr) {
+            console.log('Update popup check completed/skipped.');
+        }
 
-        // 3. Direct DOM Click: Bina kisi pointer lock ya overlay block ke seedha click
-        console.log('Clicking CREATE VISITOR button via direct DOM...');
-        const createBtnClicked = await page.evaluate(() => {
-            document.querySelectorAll('.MuiDialog-root, .MuiModal-root').forEach(m => {
-                if (m.innerText && m.innerText.includes('Update Available')) m.remove();
-            });
+        // Agar koi modal ya backdrop abhi bhi bacha ho, toh use DOM se hata dein
+        await page.evaluate(() => {
+            const modals = document.querySelectorAll('.MuiDialog-root, .MuiModal-root');
+            modals.forEach(m => m.remove());
+        }).catch(() => null);
 
+        await page.waitForTimeout(1000);
+
+        // ========================================================
+        // 2. "CREATE VISITOR" CLICK
+        // ========================================================
+        console.log('Finding and clicking "CREATE VISITOR" button...');
+        const createBtn = page.locator('button:has-text("CREATE VISITOR"), button:has-text("Create Visitor"), button:has-text("CHECK-IN")').first();
+        
+        await createBtn.waitFor({ state: 'visible', timeout: 15000 });
+
+        // Direct DOM click + Playwright click fallback taaki kisi bhi haal me click trigger ho
+        await page.evaluate(() => {
             const buttons = Array.from(document.querySelectorAll('button'));
-            const targetBtn = buttons.find(b => {
+            const btn = buttons.find(b => {
                 const txt = (b.textContent || '').trim().toUpperCase();
                 return txt.includes('CREATE VISITOR') || txt.includes('CHECK-IN');
             });
-
-            if (targetBtn) {
-                targetBtn.click();
-                return true;
-            }
-            return false;
+            if (btn) btn.click();
         });
 
-        if (!createBtnClicked) {
-            throw new Error('Create Visitor / Check-In button DOM me nahi mila.');
-        }
-
-        // Form fields render hone ka wait karein
+        // Form load hone ka wait karein
         await page.waitForSelector('input[name="checkInDateTime"], input[name="roomNumber"]', { timeout: 15000 });
+        console.log('Create Visitor Form successfully opened!');
 
+        console.log('Filling Booking Level Details...');
+        
         // 1. Fill Booking Base Level Fields
         await page.evaluate(async (bData) => {
             const norm = v => String(v || '').replace(/\u200B/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
