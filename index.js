@@ -15,15 +15,117 @@ const app = express();
 app.use(express.json({ limit: '50mb' }));
 
 const FIXED_BASE_URL = 'https://ballyfin.in';
-const PORT = process.env.PORT || 3000;
 
 const axiosInstance = axios.create({
     httpsAgent: new https.Agent({ rejectUnauthorized: false }),
     timeout: 20000
 });
 
+const PORT = process.env.PORT || 3000;
+
+app.get('/', (req, res) => {
+    res.send('E-Visitor Automation Scraper is Active & Fast (Playwright)!');
+});
+
+async function sendCallback(callbackUrl, payload) {
+    if (!callbackUrl) {
+        console.log('callback_url nahi diya gaya.');
+        return false;
+    }
+
+    try {
+        console.log('Callback sending:', callbackUrl);
+
+        const response = await axiosInstance.post(
+            callbackUrl,
+            payload,
+            {
+                timeout: 15000,
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                maxContentLength: Infinity,
+                maxBodyLength: Infinity
+            }
+        );
+
+        console.log(
+            'Callback success:',
+            response.status,
+            response.data
+        );
+
+        return true;
+    } catch (error) {
+        console.error(
+            'Callback failed:',
+            error.message
+        );
+
+        if (error.response) {
+            console.error(
+                'Callback response:',
+                error.response.status,
+                error.response.data
+            );
+        }
+
+        return false;
+    }
+}
+
+function startCreateVisitorBackground(auth_storage, booking_data, callback_url) {
+    setImmediate(async () => {
+        try {
+            console.log('BACKGROUND CREATE VISITOR STARTED');
+
+            const result = await processCreateVisitor(
+                auth_storage,
+                booking_data
+            );
+
+            console.log(
+                'Background process completed:',
+                result.status
+            );
+
+            if (callback_url) {
+                await sendCallback(
+                    callback_url,
+                    {
+                        status: result.status,
+                        message: result.message || '',
+                        updated_person_ids: result.updated_person_ids || [],
+                        screenshot: result.screenshot || null,
+                        error_screenshot: result.error_screenshot || null,
+                        timestamp: new Date().toISOString()
+                    }
+                );
+            }
+        } catch (error) {
+            console.error(
+                'Background process fatal error:',
+                error
+            );
+
+            if (callback_url) {
+                await sendCallback(
+                    callback_url,
+                    {
+                        status: 'failed',
+                        message: error.message || 'Background automation failed',
+                        updated_person_ids: [],
+                        screenshot: null,
+                        error_screenshot: null,
+                        timestamp: new Date().toISOString()
+                    }
+                );
+            }
+        }
+    });
+}
+
 async function getBrowser() {
-    // 1. Check if existing browser is still connected
     if (sharedBrowser && sharedBrowser.isConnected()) {
         return sharedBrowser;
     }
@@ -34,8 +136,6 @@ async function getBrowser() {
 
     browserStarting = (async () => {
         const executablePath = await sparticuzChromium.executablePath();
-
-        // --single-process flag ko hatana zaroori hai kyunki ye crash karta hai
         const filteredArgs = sparticuzChromium.args.filter(
             arg => !arg.includes('--single-process')
         );
@@ -47,7 +147,7 @@ async function getBrowser() {
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
                 '--disable-gpu',
-                '--no-zygote',
+                '--no-first-run',
                 '--disable-background-networking',
                 '--disable-default-apps',
                 '--disable-extensions',
@@ -58,9 +158,8 @@ async function getBrowser() {
             headless: true
         });
 
-        // Agar Render par memory issue se browser crash ho, toh reference reset karein
         browser.on('disconnected', () => {
-            console.log('Chromium browser disconnected/killed, resetting reference.');
+            console.log('Browser disconnected, resetting reference...');
             sharedBrowser = null;
         });
 
@@ -79,7 +178,11 @@ async function downloadImage(url, destPath) {
     if (!url) return false;
     try {
         const writer = fs.createWriteStream(destPath);
-        const response = await axiosInstance({ url, method: 'GET', responseType: 'stream' });
+        const response = await axiosInstance({
+            url,
+            method: 'GET',
+            responseType: 'stream'
+        });
         response.data.pipe(writer);
         return new Promise((resolve, reject) => {
             writer.on('finish', () => resolve(true));
@@ -89,130 +192,56 @@ async function downloadImage(url, destPath) {
             });
         });
     } catch (err) {
+        console.error('Image Download Failed:', url, err.message);
         return false;
     }
 }
 
-// MUI Selects ke exact IDs ke liye solid helper
-async function selectMuiDropdown(page, selectId, targetText, allowPartial = true) {
-    if (!targetText) return false;
-    const clean = str => (str || '').replace(/\u200B/g, '').trim().toLowerCase();
-    const search = clean(targetText);
+app.all('/scrape', async (req, res) => {
+    const targetUrl = req.query.url || req.body.url;
+
+    if (!targetUrl) {
+        return res.status(400).json({ error: 'URL parameter missing hai' });
+    }
+
+    let browser = null;
+    let context = null;
 
     try {
-        const selectTrigger = page.locator(`#${selectId}`);
-        await selectTrigger.waitFor({ state: 'visible', timeout: 8000 });
+        browser = await getBrowser();
+        context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+        const page = await context.newPage();
 
-        // Disabled state check (State select hone ke baad District enable hone ka wait)
-        for (let i = 0; i < 20; i++) {
-            const isDisabled = await selectTrigger.evaluate(el => el.classList.contains('Mui-disabled') || el.closest('.Mui-disabled') !== null);
-            if (!isDisabled) break;
-            await page.waitForTimeout(300);
-        }
-
-        await selectTrigger.click();
-        await page.waitForTimeout(300);
-
-        const listbox = page.locator('ul[role="listbox"]');
-        await listbox.waitFor({ state: 'visible', timeout: 6000 });
-
-        const options = page.locator('li[role="option"]');
-        const count = await options.count();
-        let targetOption = null;
-
-        for (let i = 0; i < count; i++) {
-            const opt = options.nth(i);
-            const text = clean(await opt.innerText());
-            if (text === search) {
-                targetOption = opt;
-                break;
+        await page.route('**/*', (route) => {
+            const resource = route.request().resourceType();
+            if (['image', 'stylesheet', 'font', 'media'].includes(resource)) {
+                route.abort();
+            } else {
+                route.continue();
             }
+        });
+
+        await page.goto(targetUrl, { 
+            waitUntil: 'domcontentloaded', 
+            timeout: 30000 
+        });
+
+        try {
+            await page.waitForSelector('body', { timeout: 5000 });
+        } catch (e) {
+            console.log('Element wait timeout, proceeding anyway...');
         }
 
-        if (!targetOption && allowPartial) {
-            for (let i = 0; i < count; i++) {
-                const opt = options.nth(i);
-                const text = clean(await opt.innerText());
-                if (text.includes(search) || search.includes(text)) {
-                    targetOption = opt;
-                    break;
-                }
-            }
-        }
+        const htmlContent = await page.content();
+        await context.close();
 
-        if (targetOption) {
-            await targetOption.scrollIntoViewIfNeeded();
-            await targetOption.click();
-            await page.waitForTimeout(300);
-            return true;
-        } else {
-            console.log(`Option "${targetText}" not found in #${selectId}`);
-            await page.keyboard.press('Escape');
-            await page.waitForTimeout(200);
-            return false;
-        }
-    } catch (e) {
-        console.error(`Dropdown error on #${selectId}:`, e.message);
-        await page.keyboard.press('Escape').catch(() => null);
-        return false;
-    }
-}
-
-async function doLoginOnPage(page, sso_id, password) {
-    console.log('Session expire mila. Automatic re-login shuru kar rahe hain...');
-
-    // Top Login button par click karein agar homepage par hain
-    const topLoginBtn = page.locator('button:has-text("Login"), button.login-btn').first();
-    if (await topLoginBtn.isVisible({ timeout: 4000 }).catch(() => false)) {
-        await topLoginBtn.click();
-    }
-
-    const ssoInput = page.locator('input[placeholder="Enter SSO ID"]');
-    await ssoInput.waitFor({ timeout: 10000 });
-
-    // Captcha read karein
-    const captchaCode = await page.evaluate(() => {
-        const el = document.querySelector('.css-uayl0r');
-        if (el && el.innerText.trim()) return el.innerText.trim();
-        const captchaInput = document.querySelector('input[placeholder="Enter Captcha"]');
-        if (captchaInput) {
-            const parentBox = captchaInput.closest('.css-1tx38fa');
-            if (parentBox) {
-                const textDiv = parentBox.querySelector('.MuiBox-root');
-                if (textDiv) return textDiv.innerText.trim();
-            }
-        }
-        return null;
-    });
-
-    if (!captchaCode) {
-        throw new Error('Auto re-login ke time CAPTCHA DOM me nahi mila.');
-    }
-
-    await ssoInput.fill(sso_id);
-    await page.locator('input[placeholder="Enter Password"]').fill(password);
-    await page.locator('input[placeholder="Enter Captcha"]').fill(captchaCode);
-
-    await page.locator('button:has-text("Submit")').click();
-
-    // Login card gayab hone ka wait karein
-    await page.waitForFunction(() => !document.querySelector('.login-card'), { timeout: 12000 }).catch(() => null);
-    await page.waitForTimeout(2000);
-    console.log('Automatic re-login safal raha!');
-}
-
-async function sendCallback(callbackUrl, payload) {
-    if (!callbackUrl) return false;
-    try {
-        await axiosInstance.post(callbackUrl, payload, { timeout: 15000 });
-        return true;
+        return res.send(htmlContent);
     } catch (error) {
-        console.error('Callback error:', error.message);
-        return false;
+        if (context) await context.close();
+        return res.status(500).json({ error: 'Automation Error: ' + error.message });
     }
-}
+});
 
-// ---------------- LOGIN ENDPOINT ----------------
 app.post('/login-evisitor', async (req, res) => {
     const { url, sso_id, password } = req.body;
     const loginBaseUrl = url || 'https://evisitor.rajasthan.gov.in/evisitor';
@@ -223,30 +252,36 @@ app.post('/login-evisitor', async (req, res) => {
         context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
         const page = await context.newPage();
 
-        // CSS/Media block for speed
         await page.route('**/*', (route) => {
-            const resource = route.request().resourceType();
-            if (['image', 'font', 'media', 'stylesheet'].includes(resource)) {
+            const type = route.request().resourceType();
+            if (['image', 'font', 'media', 'stylesheet'].includes(type)) {
                 route.abort();
             } else {
                 route.continue();
             }
         });
 
-        await page.goto(loginBaseUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+        console.log('Not logged in. Redirected to login page. Starting login automation...');
+        await page.goto(loginBaseUrl, { waitUntil: 'load', timeout: 25000 });
 
-        const topLoginBtn = page.locator('button.login-btn');
-        if (await topLoginBtn.count() > 0) {
+        const topLoginBtn = page.locator('button.login-btn').first();
+        if (await topLoginBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
             await topLoginBtn.click();
         }
 
         const ssoInput = page.locator('input[placeholder="Enter SSO ID"]');
         await ssoInput.waitFor({ timeout: 10000 });
 
-        // Captcha Extraction
+        try {
+            await page.waitForSelector('.css-uayl0r', { timeout: 3000 });
+        } catch (e) {
+            console.log('Captcha selector wait timeout, evaluating DOM...');
+        }
+
         const captchaCode = await page.evaluate(() => {
             const el = document.querySelector('.css-uayl0r');
             if (el && el.innerText.trim()) return el.innerText.trim();
+
             const captchaInput = document.querySelector('input[placeholder="Enter Captcha"]');
             if (captchaInput) {
                 const parentBox = captchaInput.closest('.css-1tx38fa');
@@ -259,55 +294,99 @@ app.post('/login-evisitor', async (req, res) => {
         });
 
         if (!captchaCode) {
-            throw new Error('CAPTCHA DOM se read nahi ho paya.');
+            throw new Error('CAPTCHA code DOM me load nahi ho paya. Refresh karke try karein.');
         }
 
-        await ssoInput.fill(sso_id);
+        await page.click('input[placeholder="Enter SSO ID"]', { clickCount: 3 });
+        await page.locator('input[placeholder="Enter SSO ID"]').fill(sso_id);
+
+        await page.click('input[placeholder="Enter Password"]', { clickCount: 3 });
         await page.locator('input[placeholder="Enter Password"]').fill(password);
+
+        await page.click('input[placeholder="Enter Captcha"]', { clickCount: 3 });
         await page.locator('input[placeholder="Enter Captcha"]').fill(captchaCode);
 
-        await page.locator('button:has-text("Submit")').click();
+        const submitBtn = page.locator('button:has-text("Submit")').first();
+        if (await submitBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+            await submitBtn.click();
+        }
 
-        // Wait for login toast or card dismissal
-        const toast = page.locator('.Toastify__toast');
-        let toastText = '';
+        let toastData = { success: false, message: '' };
         try {
-            await toast.waitFor({ timeout: 4000 });
-            toastText = (await toast.innerText()).trim();
-        } catch (e) {}
+            await page.waitForSelector('.Toastify__toast', { timeout: 3000 });
+            toastData = await page.evaluate(() => {
+                const toastEl = document.querySelector('.Toastify__toast');
+                if (!toastEl) return { success: false, message: '' };
+                const text = toastEl.innerText ? toastEl.innerText.trim() : '';
+                const isSuccessClass = toastEl.classList.contains('Toastify__toast--success');
+                const isSuccessText = text.toLowerCase().includes('success') || text.toLowerCase().includes('successful');
+                return { success: isSuccessClass || isSuccessText, message: text };
+            });
+        } catch (e) {
+            console.log('Toast wait complete.');
+        }
+
+        if (toastData.message && !toastData.success) {
+            await context.close();
+            return res.status(400).json({
+                status: 'login_failed',
+                toast_message: toastData.message,
+                captcha_used: captchaCode
+            });
+        }
 
         await page.waitForFunction(() => !document.querySelector('.login-card'), { timeout: 10000 }).catch(() => null);
+        await new Promise(resolve => setTimeout(resolve, 4000));
 
-        // Session storage & cookies capture
-        const cookies = await context.cookies();
-        const storageData = await page.evaluate(() => {
-            const loc = {};
-            const ses = {};
-            for (let i = 0; i < localStorage.length; i++) loc[localStorage.key(i)] = localStorage.getItem(localStorage.key(i));
-            for (let i = 0; i < sessionStorage.length; i++) ses[sessionStorage.key(i)] = sessionStorage.getItem(sessionStorage.key(i));
-            return { localStorage: loc, sessionStorage: ses };
+        const nextPageHtml = await page.content();
+        const allCookies = await context.cookies();
+
+        const authStorage = await page.evaluate(() => {
+            let localData = {};
+            let sessionData = {};
+
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                localData[key] = localStorage.getItem(key);
+            }
+
+            for (let i = 0; i < sessionStorage.length; i++) {
+                const key = sessionStorage.key(i);
+                sessionData[key] = sessionStorage.getItem(key);
+            }
+
+            return {
+                localStorage: localData,
+                sessionStorage: sessionData
+            };
         });
 
         await context.close();
 
         return res.json({
             status: 'success',
-            toast_message: toastText || 'Login Successful',
-            cookies: cookies,
-            auth_storage: storageData
+            toast_message: toastData.message || 'Login Successful',
+            captcha_used: captchaCode,
+            cookies: allCookies,
+            auth_storage: authStorage,
+            next_page_html: nextPageHtml
         });
-
     } catch (error) {
         if (context) await context.close();
-        return res.status(500).json({ status: 'error', message: error.message });
+        return res.status(500).json({
+            status: 'error',
+            message: error.message
+        });
     }
 });
 
-// ---------------- CREATE VISITOR LOGIC ----------------
-async function processCreateVisitor(auth_storage, booking_data, sso_credentials) {
+// CREATE VISITOR AUTOMATION ENDPOINT
+async function processCreateVisitor(auth_storage, booking_data) {
     const visitorsUrl = 'https://evisitor.rajasthan.gov.in/evisitor/user/visitors';
+    
+    let browser = null;
     let context = null;
-    let page = null;
+    let page = null; 
     let tempFiles = [];
     const updatedPersonIds = [];
 
@@ -320,21 +399,7 @@ async function processCreateVisitor(auth_storage, booking_data, sso_credentials)
             serviceWorkers: 'block'
         });
 
-        // 🚨 1. AUTO-KILLER: Jaise hi DOM me Update popup aaye, turant delete karein
-        await context.addInitScript(() => {
-            const observer = new MutationObserver(() => {
-                const modals = document.querySelectorAll('.MuiDialog-root, .MuiModal-root');
-                modals.forEach(m => {
-                    if (m.innerText && m.innerText.includes('Update Available')) {
-                        console.log('Update popup auto-killed from DOM');
-                        m.remove();
-                    }
-                });
-            });
-            observer.observe(document.documentElement, { childList: true, subtree: true });
-        });
-
-        // Storage un-nesting fix
+        // Un-nesting storage agar Laravel se auth_storage wrap hokar aaya ho
         let storageData = auth_storage;
         if (storageData && storageData.auth_storage) {
             storageData = storageData.auth_storage;
@@ -359,10 +424,9 @@ async function processCreateVisitor(auth_storage, booking_data, sso_credentials)
 
         page = await context.newPage();
 
-        // Speed optimization: Drop media & fonts
         await page.route('**/*', (route) => {
-            const resource = route.request().resourceType();
-            if (['font', 'media', 'stylesheet'].includes(resource)) {
+            const type = route.request().resourceType();
+            if (['image', 'font', 'media', 'stylesheet'].includes(type)) {
                 route.abort();
             } else {
                 route.continue();
@@ -370,7 +434,6 @@ async function processCreateVisitor(auth_storage, booking_data, sso_credentials)
         });
 
         await page.goto('https://evisitor.rajasthan.gov.in/evisitor', { waitUntil: 'commit' });
-        
         if (storageData) {
             await page.evaluate((storage) => {
                 if (storage.localStorage) {
@@ -385,294 +448,582 @@ async function processCreateVisitor(auth_storage, booking_data, sso_credentials)
         console.log('Navigating to Visitors Page...');
         await page.goto(visitorsUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-        // 🚨 2. AUTO RE-LOGIN CHECK
-        const isLoggedOut = page.url().includes('login') || 
-                            !page.url().includes('/user/visitors') || 
-                            (await page.locator('button:has-text("Login"), button.login-btn').first().isVisible({ timeout: 2500 }).catch(() => false));
-
-        if (isLoggedOut) {
-            console.log('Session expire mila. Re-login trigger kar rahe hain...');
-            if (sso_credentials && sso_credentials.sso_id && sso_credentials.password) {
-                await doLoginOnPage(page, sso_credentials.sso_id, sso_credentials.password);
-                await page.goto(visitorsUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
-            } else {
-                throw new Error('Session expire ho gaya hai aur auto-login credentials nahi mile.');
-            }
+        if (page.url().includes('login') || !page.url().includes('/user/visitors')) {
+            throw new Error('Session expire ho gaya hai ya invalid auth data hai.');
         }
 
-        // 🚨 3. CLEAR ALL MODALS / BACKDROPS BEFORE CLICK
-        await page.evaluate(() => {
-            document.querySelectorAll('.MuiDialog-root, .MuiModal-root, .MuiBackdrop-root').forEach(m => {
-                if (m.innerText && m.innerText.includes('Update Available')) {
-                    m.remove();
-                }
-            });
-        }).catch(() => null);
+        // Update popup check
+        try {
+            const updateBtn = page.locator('button:has-text("Update Now"), button:has-text("UPDATE NOW")').first();
+            if (await updateBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+                await updateBtn.click();
+                await page.waitForTimeout(2500);
+            }
+        } catch (e) {}
 
-        await page.waitForTimeout(1000);
-
-        // 🚨 4. FORCE CLICK CREATE VISITOR (No Timeout / No Backdrop Blocking)
-        console.log('Clicking "CREATE VISITOR" button with FORCE & DOM fallback...');
-        const createBtn = page.locator('button:has-text("CREATE VISITOR"), button:has-text("Create Visitor"), button:has-text("CHECK-IN")').first();
-        await createBtn.waitFor({ state: 'attached', timeout: 15000 });
-
-        // Direct DOM click + force click (kisi bhi overlay/backdrop ko bypass karega)
-        await page.evaluate(() => {
+        const createBtnClicked = await page.evaluate(() => {
             const buttons = Array.from(document.querySelectorAll('button'));
-            const btn = buttons.find(b => {
+            const targetBtn = buttons.find(b => {
                 const txt = (b.textContent || '').trim().toUpperCase();
                 return txt.includes('CREATE VISITOR') || txt.includes('CHECK-IN');
             });
-            if (btn) btn.click();
+            if (targetBtn) {
+                targetBtn.click();
+                return true;
+            }
+            return false;
         });
 
-        // Agar DOM click trigger na hua ho toh Playwright force click karein
-        await createBtn.click({ force: true, timeout: 5000 }).catch(() => null);
-
-        await page.waitForSelector('input[name="roomNumber"]', { timeout: 15000 });
-        console.log('Create Visitor Form successfully opened!');
-        // 4. ROOM & BASE DETAILS FILLING
-        console.log('Filling Room & Base Details...');
-        if (booking_data.room_number) {
-            await page.locator('input[name="roomNumber"]').fill(String(booking_data.room_number));
-        }
-        if (booking_data.check_in_date_time) {
-            await page.locator('input[name="checkInDateTime"]').fill(booking_data.check_in_date_time);
-        }
-        if (booking_data.coming_from) {
-            await page.locator('input[name="comingLocation"]').fill(booking_data.coming_from);
-        }
-        if (booking_data.going_to) {
-            await page.locator('input[name="goingLocation"]').fill(booking_data.going_to);
-        }
-        if (booking_data.visit_reason) {
-            await selectMuiDropdown(page, 'mui-component-select-visitReasonType', booking_data.visit_reason);
+        if (!createBtnClicked) {
+            throw new Error('Create Visitor / Check-In button nahi mila.');
         }
 
-        // 5. GUESTS LOOP
+        await new Promise(r => setTimeout(r, 1000));
+
+        console.log('Filling Booking Level Details...');
+        const baseResult = await page.evaluate(async (bData) => {
+            const sleep = ms => new Promise(r => setTimeout(r, ms));
+            const norm = v => String(v || '').replace(/\u200B/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+            function fireReactInput(el, value) {
+                if (!el) return false;
+                try { el.removeAttribute('disabled'); } catch (e) {}
+                const v = value ?? '';
+                const isTa = el.tagName === 'TEXTAREA';
+                const setter = Object.getOwnPropertyDescriptor((isTa ? HTMLTextAreaElement : HTMLInputElement).prototype, 'value')?.set;
+                try {
+                    if (setter) setter.call(el, v);
+                    else el.value = v;
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    el.dispatchEvent(new Event('blur', { bubbles: true }));
+                    return true;
+                } catch (e) { return false; }
+            }
+
+            function setInputByName(name, value) {
+                if (value === undefined || value === null || value === '') return false;
+                const el = document.querySelector(`[name="${name}"]`);
+                return el ? fireReactInput(el, value) : false;
+            }
+
+            async function selectComboByIndex(index, optionText) {
+                if (!optionText) return false;
+                const combos = Array.from(document.querySelectorAll('[role="combobox"]'));
+                const combo = combos[index] || combos[combos.length - 1];
+                if (!combo) return false;
+
+                combo.scrollIntoView({ behavior: 'instant', block: 'center' });
+                await sleep(300);
+                combo.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                combo.click();
+
+                let options = [];
+                const need = norm(optionText);
+
+                for (let attempt = 0; attempt < 10; attempt++) {
+                    await sleep(50);
+                    options = Array.from(document.querySelectorAll('li[role="option"]')).filter(o => {
+                        const rect = o.getBoundingClientRect();
+                        const isVisible = rect.width > 0 && rect.height > 0;
+                        const t = (o.innerText || o.textContent || '').replace(/\u200B/g, '').trim();
+                        return isVisible && t !== '';
+                    });
+                    if (options.length > 0) break;
+                }
+
+                if (options.length === 0) {
+                    document.body.click();
+                    await sleep(300);
+                    return false;
+                }
+
+                const option = options.find(o => {
+                    const text = norm(o.innerText || o.textContent);
+                    if (text === need) return true;
+                    return text.includes(need);
+                });
+
+                if (!option) {
+                    document.body.click();
+                    await sleep(50);
+                    return false;
+                }
+
+                option.scrollIntoView({ behavior: 'instant', block: 'center' });
+                await sleep(30);
+                option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                option.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+                option.click();
+                await sleep(80);
+                return true;
+            }
+
+            if (bData.check_in_date_time) setInputByName('checkInDateTime', bData.check_in_date_time);
+            if (bData.room_number) setInputByName('roomNumber', bData.room_number);
+            if (bData.coming_from) setInputByName('comingLocation', bData.coming_from);
+            if (bData.going_to) setInputByName('goingLocation', bData.going_to);
+
+            if (bData.visit_reason) {
+                await selectComboByIndex(0, bData.visit_reason);
+            }
+
+            return { success: true };
+        }, booking_data);
+
+        if (!baseResult.success) {
+            throw new Error('Booking base level fields fill nahi ho sake.');
+        }
+
         const guests = booking_data.guests || [];
         console.log(`Processing ${guests.length} guest(s)...`);
 
         for (let i = 0; i < guests.length; i++) {
             const guest = guests[i];
-            console.log(`Filling Guest ${i + 1}: ${guest.full_name || guest.name}`);
+            console.log(`Filling Guest ${i + 1}: ${guest.full_name || guest.name || 'Guest'}`);
 
-            // Text Inputs
-            await page.locator('input[name="name"]').fill(guest.full_name || guest.name || '');
-            if (guest.dateOfBirth) {
-                await page.locator('input[name="dateOfBirth"]').fill(guest.dateOfBirth);
-            }
-            if (guest.mobile_number || guest.mobile) {
-                await page.locator('input[name="mobileNumber"]').fill(String(guest.mobile_number || guest.mobile));
-            }
+            const guestFillResult = await page.evaluate(async (g) => {
+                const sleep = ms => new Promise(r => setTimeout(r, ms));
+                const norm = v => String(v || '').replace(/\u200B/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
 
-            // MUI Dropdowns with exact HTML IDs
-            const genderVal = (guest.gender || 'Male').toLowerCase() === 'female' ? 'Female' : 'Male';
-            await selectMuiDropdown(page, 'mui-component-select-gender', genderVal);
+                function fireReactInput(el, value) {
+                    if (!el) return false;
+                    try { el.removeAttribute('disabled'); } catch (e) {}
+                    const v = value ?? '';
+                    const isTa = el.tagName === 'TEXTAREA';
+                    const setter = Object.getOwnPropertyDescriptor((isTa ? HTMLTextAreaElement : HTMLInputElement).prototype, 'value')?.set;
+                    try {
+                        if (setter) setter.call(el, v);
+                        else el.value = v;
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                        el.dispatchEvent(new Event('blur', { bubbles: true }));
+                        return true;
+                    } catch (e) { return false; }
+                }
 
-            await selectMuiDropdown(page, 'mui-component-select-stateCd', guest.state || 'Rajasthan');
-            
-            // Wait for district options to load via backend API
-            await page.waitForTimeout(600);
-            await selectMuiDropdown(page, 'mui-component-select-districtcd', guest.district || 'Jaipur');
+                function setInputByName(name, value) {
+                    if (value === undefined || value === null || value === '') return false;
+                    const el = document.querySelector(`[name="${name}"]`);
+                    return el ? fireReactInput(el, value) : false;
+                }
 
-            // Document Type Dropdown
-            const docType = guest.document_type || 'Aadhaar Card';
-            await selectMuiDropdown(page, 'mui-component-select-documentType', docType);
-            await page.waitForTimeout(400);
+                function setDocumentNumber(value) {
+                    if (!value) return false;
+                    const selectors = [
+                        'input[name="documentNumber"]',
+                        'input[placeholder*="document number" i]',
+                        'input[placeholder*="Document Number" i]',
+                        'input[placeholder*="document" i]',
+                        'input[name="idNumber"]',
+                        'input[name="docNumber"]'
+                    ];
+                    for (const selector of selectors) {
+                        const el = document.querySelector(selector);
+                        if (el) return fireReactInput(el, value);
+                    }
+                    return false;
+                }
 
-            // Document Number (Check if enabled)
-            const docNumInput = page.locator('input[name="documentNumber"]');
-            const isDocDisabled = await docNumInput.isDisabled();
-            if (!isDocDisabled && guest.document_number) {
-                await docNumInput.fill(String(guest.document_number));
-            }
+                function getGender(v) {
+                    const x = norm(v);
+                    if (x === 'female' || x === 'f') return 'Female';
+                    if (x === 'male' || x === 'm') return 'Male';
+                    if (x === 'other' || x === 'o') return 'Other';
+                    return v || '';
+                }
 
-            // Address Textarea
-            await page.locator('textarea[name="address"]').fill(guest.address || 'Rajasthan');
+                async function selectComboByTarget(targetKeyword, fallbackIndex, optionText, useSecondOptionFallback = false) {
+                    if (!optionText) return false;
+                    const combos = Array.from(document.querySelectorAll('[role="combobox"]'));
+                    
+                    let combo = null;
+                    if (targetKeyword) {
+                        const kw = norm(targetKeyword);
+                        combo = combos.find(c => {
+                            const parent = c.closest('.MuiFormControl-root, .form-group, div') || c.parentElement;
+                            const text = norm(parent ? parent.innerText || parent.textContent : '');
+                            const placeholder = norm(c.getAttribute('placeholder') || '');
+                            const ariaLabel = norm(c.getAttribute('aria-label') || '');
+                            const id = norm(c.id || '');
+                            const name = norm(c.getAttribute('name') || '');
+                            return text.includes(kw) || placeholder.includes(kw) || ariaLabel.includes(kw) || id.includes(kw) || name.includes(kw);
+                        });
+                    }
 
-            // 6. DOCUMENT DOWNLOAD & 25KB AUTO-PADDING
-            let rawDocUrls = [guest.document_url, guest.document_url_2].filter(Boolean);
-            rawDocUrls = [...new Set(rawDocUrls)];
-            const docUrls = rawDocUrls.map(u => (typeof u === 'string' && u.startsWith('/')) ? `${FIXED_BASE_URL}${u}` : u);
+                    if (!combo && fallbackIndex !== undefined) {
+                        combo = combos[fallbackIndex] || combos[combos.length - 1];
+                    }
 
-            const downloadedPaths = [];
-            for (let dIdx = 0; dIdx < docUrls.length; dIdx++) {
-                if (typeof docUrls[dIdx] === 'string' && docUrls[dIdx].startsWith('http')) {
-                    const docPath = path.join('/tmp', `doc_${i}_${dIdx}_${Date.now()}.jpg`);
-                    const ok = await downloadImage(docUrls[dIdx], docPath);
-                    if (ok && fs.existsSync(docPath)) {
-                        const stats = fs.statSync(docPath);
-                        console.log(`Document downloaded: ${stats.size} bytes`);
+                    if (!combo) return false;
 
-                        // 🚨 25KB Rule Fix: Agar size 25.6KB se chhota hai, pad karein
-                        if (stats.size < 26000) {
-                            const padding = Buffer.alloc(26000 - stats.size, 0);
-                            fs.appendFileSync(docPath, padding);
-                            console.log(`Document padded to 26KB to satisfy portal limit.`);
+                    for (let attempt = 0; attempt < 20; attempt++) { 
+                        const isMuiDisabled = combo.classList.contains('Mui-disabled') || (combo.closest('.Mui-disabled') !== null);
+                        const isDisabled = combo.hasAttribute('disabled') || combo.getAttribute('aria-disabled') === 'true';
+                        
+                        if (!isDisabled && !isMuiDisabled) break;
+                        await sleep(500);
+                    }
+
+                    combo.scrollIntoView({ behavior: 'instant', block: 'center' });
+                    await sleep(60);
+                    
+                    const need = norm(optionText);
+
+                    if (combo.tagName === 'INPUT') {
+                        combo.focus();
+                        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                        if (setter) setter.call(combo, ''); else combo.value = '';
+                        combo.dispatchEvent(new Event('input', { bubbles: true }));
+                        await sleep(300);
+                        
+                        if (optionText.length > 2) {
+                            const typeText = optionText.substring(0, 4);
+                            if (setter) setter.call(combo, typeText); else combo.value = typeText;
+                            combo.dispatchEvent(new Event('input', { bubbles: true }));
+                            await sleep(80); 
+                        }
+                    }
+
+                    combo.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                    combo.click();
+
+                    let option = null;
+
+                    for (let attempt = 0; attempt < 30; attempt++) { 
+                        await sleep(500);
+                        
+                        const options = Array.from(document.querySelectorAll('li[role="option"]')).filter(o => {
+                            const rect = o.getBoundingClientRect();
+                            return rect.width > 0 && rect.height > 0;
+                        });
+
+                        option = options.find(o => {
+                            const text = norm(o.innerText || o.textContent);
+                            return text === need || text.startsWith(need + ' ') || text.endsWith(' ' + need) || text.includes(' ' + need + ' ');
+                        });
+
+                        if (!option) {
+                            option = options.find(o => norm(o.innerText || o.textContent).includes(need));
                         }
 
-                        downloadedPaths.push(docPath);
-                        tempFiles.push(docPath);
+                        if (option) {
+                            break; 
+                        }
+
+                        if (attempt === 10 || attempt === 20) {
+                            combo.click();
+                        }
+                    }
+
+                    if (option) {
+                        option.scrollIntoView({ behavior: 'instant', block: 'center' });
+                        await sleep(30);
+                        option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                        option.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+                        option.click();
+                        await sleep(60);
+                    } else if (useSecondOptionFallback) {
+                        const visibleOptions = Array.from(
+                            document.querySelectorAll('li[role="option"]')
+                        ).filter(o => {
+                            const rect = o.getBoundingClientRect();
+                            return rect.width > 0 && rect.height > 0;
+                        });
+                    
+                        if (visibleOptions.length >= 2) {
+                            const defaultOption = visibleOptions[1];
+                            defaultOption.click();
+                            await sleep(30);
+                        }
+                    }
+
+                    document.dispatchEvent(new KeyboardEvent('keydown', {
+                        key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true
+                    }));
+                    await sleep(50);
+                    document.body.click();
+                    
+                    for (let i = 0; i < 10; i++) {
+                        if (!document.querySelector('ul[role="listbox"]')) break;
+                        await sleep(30);
+                    }
+
+                    return !!option; 
+                }
+
+                setInputByName('name', g.full_name || g.name || g.guest_name);
+                setInputByName('mobileNumber', g.mobile_number || g.mobile);
+                setInputByName('address', g.address);
+                setInputByName('dateOfBirth', g.dateOfBirth);
+
+                if (g.gender) {
+                    await selectComboByTarget('gender', 1, getGender(g.gender));
+                }
+
+                if (g.state || g.stateCd) {
+                    await selectComboByTarget(
+                        'stateCd',
+                        3,
+                        g.state || g.stateCd,
+                        true
+                    );
+                }
+                
+                if (g.district || g.districtcd) {
+                    await selectComboByTarget(
+                        'districtcd',
+                        4,
+                        g.district || g.districtcd,
+                        true
+                    );
+                }
+
+                const docType = g.document_type || g.documentType || g.id_type || g.type || '';
+                if (docType) {
+                    let success = await selectComboByTarget('document', 6, docType);
+                    if (!success) {
+                        await selectComboByTarget('type', 5, docType);
+                    }
+                }
+
+                const isAadhaar = norm(docType).includes('aadhaar') || norm(docType).includes('aadhar');
+                if (!isAadhaar) {
+                    const docNum = g.document_number || g.documentNumber || g.id_number || g.doc_number;
+                    if (docNum) {
+                        setDocumentNumber(docNum);
+                        await sleep(80);
+                    }
+                }
+
+                return { success: true };
+            }, guest);
+
+            if (!guestFillResult.success) {
+                throw new Error(`Guest ${i + 1} ki details set nahi ho payi.`);
+            }
+
+            let rawDocUrls = [
+                guest.document_url,
+                guest.document_url_2,
+            ].filter(Boolean);
+
+            rawDocUrls = [...new Set(rawDocUrls)];
+
+            const docUrls = rawDocUrls.map(u => {
+                if (typeof u === 'string' && u.startsWith('/')) {
+                    return `${FIXED_BASE_URL}${u}`;
+                }
+                return u;
+            });
+
+            const downloadedResults = await Promise.all(
+                docUrls.map(async (url, dIdx) => {
+                    if (
+                        typeof url !== 'string' ||
+                        !url.startsWith('http')
+                    ) {
+                        return null;
+                    }
+            
+                    const docPath = path.join(
+                        '/tmp',
+                        `doc_g${i + 1}_d${dIdx + 1}_${Date.now()}.jpg`
+                    );
+            
+                    const ok = await downloadImage(url, docPath);
+            
+                    if (!ok || !fs.existsSync(docPath)) {
+                        return null;
+                    }
+
+                    // 25KB Portal requirement check & auto-pad
+                    const stats = fs.statSync(docPath);
+                    if (stats.size < 26000) {
+                        const padding = Buffer.alloc(26000 - stats.size, 0);
+                        fs.appendFileSync(docPath, padding);
+                    }
+            
+                    tempFiles.push(docPath);
+            
+                    return docPath;
+                })
+            );
+            
+            const downloadedDocPaths = downloadedResults.filter(Boolean);
+
+            if (downloadedDocPaths.length > 0) {
+                await page.waitForSelector('input[type="file"]', { timeout: 5000 }).catch(() => null);
+                const fileInputs = await page.$$('input[type="file"]');
+
+                if (fileInputs.length > 0) {
+                    if (fileInputs.length >= downloadedDocPaths.length && fileInputs.length > 1) {
+                        for (let fIdx = 0; fIdx < downloadedDocPaths.length; fIdx++) {
+                            await fileInputs[fIdx].setInputFiles(downloadedDocPaths[fIdx]);
+                            await page.evaluate((el) => {
+                                el.dispatchEvent(new Event('input', { bubbles: true }));
+                                el.dispatchEvent(new Event('change', { bubbles: true }));
+                                el.dispatchEvent(new Event('blur', { bubbles: true }));
+                            }, fileInputs[fIdx]);
+                            await new Promise(r => setTimeout(r, 1000));
+                        }
+                    } else {
+                        // Non-multiple single input
+                        await fileInputs[0].setInputFiles(downloadedDocPaths[0]);
+                        await page.evaluate((el) => {
+                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                            el.dispatchEvent(new Event('change', { bubbles: true }));
+                            el.dispatchEvent(new Event('blur', { bubbles: true }));
+                        }, fileInputs[0]);
+                        await new Promise(r => setTimeout(r, 1000));
                     }
                 }
             }
 
-            // File Upload via Playwright
-            if (downloadedPaths.length > 0) {
-                const fileInput = page.locator('input[type="file"]').first();
-                await fileInput.waitFor({ state: 'attached', timeout: 5000 });
-                await fileInput.setInputFiles(downloadedPaths[0]);
-                console.log('Document attached, waiting for upload processing...');
-                await page.waitForTimeout(2000);
-            }
+            console.log(`Clicking 'Add' button for Guest ${i + 1}...`);
+            const addResult = await page.evaluate(async () => {
+                const sleep = ms => new Promise(r => setTimeout(r, ms));
+                const buttons = Array.from(document.querySelectorAll('button'));
+                
+                // Case-insensitive exact match
+                const addBtn = buttons.find(b => (b.textContent || '').trim().toUpperCase() === 'ADD');
+                if (!addBtn) return { success: false, error: '"Add" button nahi mila.' };
 
-            // 7. CLICK 'Add' BUTTON
-            console.log(`Clicking exact 'Add' button for Guest ${i + 1}...`);
+                addBtn.click();
 
-            // MuiButton-colorSuccess class aur exact 'Add' text se target karein
-            const addBtn = page.locator('button.MuiButton-colorSuccess, button.MuiButton-containedSuccess', { 
-                hasText: /^Add$/ 
-            }).first();
+                for (let x = 0; x < 15; x++) {
+                    await sleep(100);
+                
+                    const errors = Array.from(
+                        document.querySelectorAll(
+                            '.Mui-error, .MuiFormHelperText-root.Mui-error'
+                        )
+                    )
+                    .map(e => e.innerText.trim())
+                    .filter(Boolean);
+                
+                    if (errors.length) {
+                        return {
+                            success: false,
+                            error: 'Input Error: ' +
+                                [...new Set(errors)].join(' | ')
+                        };
+                    }
+                }
 
-            await addBtn.waitFor({ state: 'visible', timeout: 10000 });
-            await addBtn.scrollIntoViewIfNeeded();
+                const errors = Array.from(document.querySelectorAll('.Mui-error, .MuiFormHelperText-root.Mui-error'))
+                    .map(e => e.innerText.trim())
+                    .filter(t => t.length > 0);
 
-            // Direct DOM Click (Overlay/Backdrop safe)
-            await page.evaluate(() => {
-                const buttons = Array.from(document.querySelectorAll('button.MuiButton-colorSuccess, button.MuiButton-containedSuccess'));
-                const btn = buttons.find(b => b.textContent.trim() === 'Add');
-                if (btn) btn.click();
+                if (errors.length > 0) {
+                    return { success: false, error: 'Input Error: ' + [...new Set(errors)].join(' | ') };
+                }
+                return { success: true };
             });
 
-            // Playwright click with force fallback
-            await addBtn.click({ force: true, timeout: 3000 }).catch(() => null);
-
-            // Validation check (Wait up to 3 seconds for any errors)
-            await page.waitForTimeout(600);
-            const errorHelper = page.locator('.Mui-error, .MuiFormHelperText-root.Mui-error');
-            const errCount = await errorHelper.count();
-            if (errCount > 0) {
-                const errTexts = await errorHelper.allInnerTexts();
-                const cleanErrors = [...new Set(errTexts.map(t => t.trim()).filter(Boolean))];
-                if (cleanErrors.length > 0) {
-                    throw new Error(`Guest ${i + 1} validation error: ${cleanErrors.join(' | ')}`);
-                }
+            if (!addResult.success) {
+                throw new Error(`Guest ${i + 1} (${guest.full_name || 'Guest'}) Add nahi ho paya: ${addResult.error}`);
             }
 
-            if (guest.person_pk) {
+            if (guest.person_pk !== undefined && guest.person_pk !== null) {
                 updatedPersonIds.push(guest.person_pk);
             }
-            console.log(`Guest ${i + 1} successfully added.`);
         }
 
-        // 8. FINAL CHECK-IN SUBMIT
         console.log('Submitting Final Check-In...');
-        const submitBtn = page.locator('button:has-text("Submit Check-In")').first();
-        await submitBtn.click();
+        await page.evaluate(() => {
+            const buttons = Array.from(document.querySelectorAll('button'));
+            const submitBtn = buttons.find(b => {
+                const txt = b.textContent.trim();
+                return txt.includes('Submit Check-In') || txt === 'Submit';
+            });
+            if (submitBtn) submitBtn.click();
+        });
 
         let toastMessage = 'Visitor check-in submitted successfully.';
         try {
-            const toast = page.locator('.Toastify__toast');
-            await toast.waitFor({ timeout: 4000 });
-            toastMessage = await toast.innerText();
+            await page.waitForSelector('.Toastify__toast', { timeout: 2000 });
+            toastMessage = await page.evaluate(() => document.querySelector('.Toastify__toast')?.innerText.trim() || 'Submitted');
         } catch (e) {}
-
+        
         tempFiles.forEach(f => { try { fs.unlinkSync(f); } catch (e) {} });
         await context.close();
 
         return { status: 'success', message: toastMessage, updated_person_ids: updatedPersonIds };
-
     } catch (error) {
         tempFiles.forEach(f => { try { fs.unlinkSync(f); } catch (e) {} });
+        
         let errorScreenshotBase64 = null;
         if (page && !page.isClosed()) {
             try {
+                console.log('Error aaya, screenshot capture kar rahe hain...');
                 const buffer = await page.screenshot({ fullPage: true });
                 errorScreenshotBase64 = buffer.toString('base64');
-            } catch (e) {}
+            } catch (screenshotError) {
+                console.error("Screenshot capture failed:", screenshotError);
+            }
         }
-        if (context) await context.close();
 
-        return {
-            status: 'failed',
-            message: error.message,
-            error_screenshot: errorScreenshotBase64 ? `data:image/png;base64,${errorScreenshotBase64}` : null
+        if (context) await context.close();
+        
+        return { 
+            status: 'failed', 
+            message: error.message + ' || ' + new Date().toString(),
+            error_screenshot: errorScreenshotBase64 ? `data:image/png;base64,${errorScreenshotBase64}` : null 
         };
     }
 }
 
-// Helpers for robust MUI Combobox Selection
-async function selectMuiCombobox(page, index, text) {
+app.post('/create-visitor', async (req, res) => {
     try {
-        const combo = page.locator('[role="combobox"]').nth(index);
-        await combo.click();
-        const option = page.locator('li[role="option"]', { hasText: new RegExp(text, 'i') }).first();
-        await option.waitFor({ timeout: 2000 });
-        await option.click();
-    } catch (e) {
-        await page.keyboard.press('Escape');
-    }
-}
+        const {
+            auth_storage,
+            booking_data,
+            callback_url
+        } = req.body;
 
-async function selectMuiComboboxByKeyword(page, keyword, text) {
-    try {
-        const combo = page.locator(`[role="combobox"]`).filter({
-            has: page.locator(`xpath=ancestor-or-self::*[contains(@class, "MuiFormControl") or contains(@name, "${keyword}") or contains(@id, "${keyword}")]`)
-        }).first();
-
-        if (await combo.count() > 0) {
-            await combo.click();
-        } else {
-            await page.locator('[role="combobox"]').first().click();
+        if (!booking_data) {
+            return res.status(400).json({
+                status: 'failed',
+                message: 'booking_data required hai.'
+            });
         }
 
-        const option = page.locator('li[role="option"]', { hasText: new RegExp(`^${text}$`, 'i') });
-        if (await option.count() > 0) {
-            await option.first().click();
-        } else {
-            const fallbackOption = page.locator('li[role="option"]', { hasText: new RegExp(text, 'i') }).first();
-            await fallbackOption.waitFor({ timeout: 1500 });
-            await fallbackOption.click();
+        if (
+            !booking_data.guests ||
+            !Array.isArray(booking_data.guests) ||
+            booking_data.guests.length === 0
+        ) {
+            return res.status(400).json({
+                status: 'failed',
+                message: 'booking_data.guests empty hai.'
+            });
         }
-    } catch (e) {
-        await page.keyboard.press('Escape');
+
+        console.log('Create visitor request received. Guests:', booking_data.guests.length);
+
+        startCreateVisitorBackground(
+            auth_storage,
+            booking_data,
+            callback_url
+        );
+
+        return res.status(202).json({
+            status: 'processing',
+            message: 'Visitor automation background mein start ho gayi hai.',
+            callback_enabled: !!callback_url,
+            guests: booking_data.guests.length,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('Create visitor request error:', error.message);
+        return res.status(500).json({
+            status: 'failed',
+            message: error.message || 'Unable to start visitor automation.'
+        });
     }
-}
-
-function startCreateVisitorBackground(auth_storage, booking_data, callback_url, sso_credentials) {
-    setImmediate(async () => {
-        try {
-            const result = await processCreateVisitor(auth_storage, booking_data, sso_credentials);
-            if (callback_url) {
-                await sendCallback(callback_url, { ...result, timestamp: new Date().toISOString() });
-            }
-        } catch (error) {
-            if (callback_url) {
-                await sendCallback(callback_url, {
-                    status: 'failed',
-                    message: error.message,
-                    timestamp: new Date().toISOString()
-                });
-            }
-        }
-    });
-}
-
-// Background Task Execution
-app.post('/create-visitor', (req, res) => {
-    const { auth_storage, booking_data, callback_url, sso_credentials } = req.body;
-    if (!booking_data || !booking_data.guests?.length) {
-        return res.status(400).json({ status: 'failed', message: 'Valid booking_data required hai.' });
-    }
-
-    startCreateVisitorBackground(auth_storage, booking_data, callback_url, sso_credentials);
-    
-    return res.status(202).json({
-        status: 'processing',
-        message: 'Automation queued successfully.',
-        callback_enabled: !!callback_url
-    });
 });
 
-app.listen(PORT, () => console.log(`Playwright service running on port ${PORT}`));
+app.listen(PORT, () => {
+    console.log(`Server active on port ${PORT}`);
+});
