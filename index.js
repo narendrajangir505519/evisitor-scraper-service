@@ -874,13 +874,21 @@ async function processCreateVisitor(auth_storage, booking_data) {
             console.log(`Clicking 'Add' button for Guest ${i + 1}...`);
             const addResult = await page.evaluate(async () => {
                 const sleep = ms => new Promise(r => setTimeout(r, ms));
-                const buttons = Array.from(document.querySelectorAll('button'));
-                
-                // Case-insensitive exact match
-                const addBtn = buttons.find(b => (b.textContent || '').trim().toUpperCase() === 'ADD');
-                if (!addBtn) return { success: false, error: '"Add" button nahi mila.' };
+                const addBtn = page.locator('button.MuiButton-colorSuccess, button.MuiButton-containedSuccess', { 
+                hasText: /^Add$/ 
+            }).first();
+                await addBtn.waitFor({ state: 'visible', timeout: 10000 });
+            await addBtn.scrollIntoViewIfNeeded();
 
-                addBtn.click();
+            // Direct DOM Click (Overlay/Backdrop safe)
+            await page.evaluate(() => {
+                const buttons = Array.from(document.querySelectorAll('button.MuiButton-colorSuccess, button.MuiButton-containedSuccess'));
+                const btn = buttons.find(b => b.textContent.trim() === 'Add');
+                if (btn) btn.click();
+            });
+
+            // Playwright click with force fallback
+            await addBtn.click({ force: true, timeout: 3000 }).catch(() => null);
 
                 for (let x = 0; x < 15; x++) {
                     await sleep(100);
