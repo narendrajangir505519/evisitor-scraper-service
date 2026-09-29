@@ -456,10 +456,8 @@ async function processCreateVisitor(auth_storage, booking_data) {
 
         const createBtnClicked = await page.evaluate(() => {
             const buttons = Array.from(document.querySelectorAll('button'));
-            const targetBtn = buttons.find(b => {
-                const txt = (b.textContent || '').trim().toUpperCase();
-                return txt.includes('CREATE VISITOR') || txt.includes('CHECK-IN');
-            });
+            const targetBtn = buttons.find(b => (b.textContent || '').trim().toUpperCase() === 'CREATE VISITOR');
+            if (!targetBtn) return { success: false, error: '"CREATE VISITOR" button nahi mila.' };
             if (targetBtn) {
                 targetBtn.click();
                 return true;
