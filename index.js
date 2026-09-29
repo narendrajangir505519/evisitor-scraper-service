@@ -446,7 +446,9 @@ async function processCreateVisitor(auth_storage, booking_data) {
         // Update popup check
         try {
             const updateBtn = page.locator('button:has-text("Update Now"), button:has-text("UPDATE NOW")').first();
+            console.log('Update Now Ka Modal Check Ho Raha Hai');
             if (await updateBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+                console.log('Update Now Ka Modal Open Hai');
                 await updateBtn.click();
                 await page.waitForTimeout(2500);
             }
