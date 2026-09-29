@@ -241,6 +241,25 @@ async function processCreateVisitor(auth_storage, booking_data) {
             throw new Error('Session expire ho gaya hai ya invalid auth data hai.');
         }
 
+        // ==========================================
+        // 🚨 NEW CODE: Handle "Update Available" Popup
+        // ==========================================
+        try {
+            // Check if Update modal appears (wait for max 3 seconds)
+            const updateBtn = page.locator('button', { hasText: 'Update Now' }).first();
+            await updateBtn.waitFor({ state: 'visible', timeout: 3000 });
+            
+            console.log('Update Available popup detected. Clicking "Update Now"...');
+            await updateBtn.click();
+            
+            // Wait a bit in case the page reloads after updating the service worker
+            await page.waitForTimeout(3000); 
+        } catch (e) {
+            // Popup nahi aaya (timeout ho gaya), normal flow continue karein
+            console.log('No update popup detected, proceeding...');
+        }
+        // ==========================================
+
         const createBtn = page.locator('button:has-text("CREATE VISITOR"), button:has-text("CHECK-IN")').first();
         await createBtn.waitFor({ timeout: 10000 });
         await createBtn.click();
