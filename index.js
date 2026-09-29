@@ -23,6 +23,7 @@ const axiosInstance = axios.create({
 });
 
 async function getBrowser() {
+    // 1. Check if existing browser is still connected
     if (sharedBrowser && sharedBrowser.isConnected()) {
         return sharedBrowser;
     }
@@ -33,18 +34,37 @@ async function getBrowser() {
 
     browserStarting = (async () => {
         const executablePath = await sparticuzChromium.executablePath();
-        return await chromium.launch({
+
+        // --single-process flag ko hatana zaroori hai kyunki ye crash karta hai
+        const filteredArgs = sparticuzChromium.args.filter(
+            arg => !arg.includes('--single-process')
+        );
+
+        const browser = await chromium.launch({
             args: [
-                ...sparticuzChromium.args,
+                ...filteredArgs,
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
                 '--disable-gpu',
+                '--no-zygote',
+                '--disable-background-networking',
+                '--disable-default-apps',
+                '--disable-extensions',
+                '--disable-sync',
                 '--mute-audio'
             ],
             executablePath: executablePath || '/usr/bin/google-chrome',
             headless: true
         });
+
+        // Agar Render par memory issue se browser crash ho, toh reference reset karein
+        browser.on('disconnected', () => {
+            console.log('Chromium browser disconnected/killed, resetting reference.');
+            sharedBrowser = null;
+        });
+
+        return browser;
     })();
 
     try {
