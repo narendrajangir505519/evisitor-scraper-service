@@ -267,6 +267,17 @@ async function processCreateVisitor(auth_storage, booking_data, sso_credentials)
             }
         });
 
+        if (auth_storage) {
+            await page.evaluate((storage) => {
+                if (storage.localStorage) {
+                    Object.keys(storage.localStorage).forEach(k => localStorage.setItem(k, storage.localStorage[k]));
+                }
+                if (storage.sessionStorage) {
+                    Object.keys(storage.sessionStorage).forEach(k => sessionStorage.setItem(k, storage.sessionStorage[k]));
+                }
+            }, auth_storage);
+        }
+
         // Initialize domain and set storage
         console.log('Navigating to Visitors Page...');
         await page.goto(visitorsUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
