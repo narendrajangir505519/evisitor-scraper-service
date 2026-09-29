@@ -204,15 +204,32 @@ async function processCreateVisitor(auth_storage, booking_data) {
     const updatedPersonIds = [];
 
     try {
-        const browser = await getBrowser();
+        browser = await getBrowser();
+
+        // 1. serviceWorkers: 'block' taaki popup check hi na ho
         context = await browser.newContext({
             viewport: { width: 1280, height: 800 },
-            timezoneId: 'Asia/Kolkata'
+            timezoneId: 'Asia/Kolkata',
+            serviceWorkers: 'block'
         });
 
         page = await context.newPage();
 
-        // Asset aborting for lightning speed
+        // 2. DOM Auto-Killer: Agar popup DOM me inject ho, turant delete kar de
+        await page.addInitScript(() => {
+            const observer = new MutationObserver(() => {
+                const modals = document.querySelectorAll('.MuiDialog-root, .MuiModal-root');
+                modals.forEach(m => {
+                    if (m.innerText && m.innerText.includes('Update Available')) {
+                        console.log('Update popup auto-killed from DOM');
+                        m.remove();
+                    }
+                });
+            });
+            observer.observe(document.documentElement, { childList: true, subtree: true });
+        });
+
+        // Speed optimization: Unnecessary assets drop karein
         await page.route('**/*', (route) => {
             const resource = route.request().resourceType();
             if (['font', 'media', 'stylesheet'].includes(resource)) {
@@ -222,7 +239,7 @@ async function processCreateVisitor(auth_storage, booking_data) {
             }
         });
 
-        // Initialize domain and set storage
+        // Domain initialize aur storage inject karein
         await page.goto('https://evisitor.rajasthan.gov.in/evisitor', { waitUntil: 'commit' });
         if (auth_storage) {
             await page.evaluate((storage) => {
@@ -235,34 +252,41 @@ async function processCreateVisitor(auth_storage, booking_data) {
             }, auth_storage);
         }
 
+        console.log('Navigating to Visitors Page...');
         await page.goto(visitorsUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
 
         if (page.url().includes('login') || !page.url().includes('/user/visitors')) {
             throw new Error('Session expire ho gaya hai ya invalid auth data hai.');
         }
 
-        // ==========================================
-        // 🚨 NEW CODE: Handle "Update Available" Popup
-        // ==========================================
-        try {
-            // Check if Update modal appears (wait for max 3 seconds)
-            const updateBtn = page.locator('button', { hasText: 'Update Now' }).first();
-            await updateBtn.waitFor({ state: 'visible', timeout: 3000 });
-            
-            console.log('Update Available popup detected. Clicking "Update Now"...');
-            await updateBtn.click();
-            
-            // Wait a bit in case the page reloads after updating the service worker
-            await page.waitForTimeout(3000); 
-        } catch (e) {
-            // Popup nahi aaya (timeout ho gaya), normal flow continue karein
-            console.log('No update popup detected, proceeding...');
-        }
-        // ==========================================
+        await page.waitForTimeout(1500);
 
-        const createBtn = page.locator('button:has-text("CREATE VISITOR"), button:has-text("CHECK-IN")').first();
-        await createBtn.waitFor({ timeout: 10000 });
-        await createBtn.click();
+        // 3. Direct DOM Click: Bina kisi pointer lock ya overlay block ke seedha click
+        console.log('Clicking CREATE VISITOR button via direct DOM...');
+        const createBtnClicked = await page.evaluate(() => {
+            document.querySelectorAll('.MuiDialog-root, .MuiModal-root').forEach(m => {
+                if (m.innerText && m.innerText.includes('Update Available')) m.remove();
+            });
+
+            const buttons = Array.from(document.querySelectorAll('button'));
+            const targetBtn = buttons.find(b => {
+                const txt = (b.textContent || '').trim().toUpperCase();
+                return txt.includes('CREATE VISITOR') || txt.includes('CHECK-IN');
+            });
+
+            if (targetBtn) {
+                targetBtn.click();
+                return true;
+            }
+            return false;
+        });
+
+        if (!createBtnClicked) {
+            throw new Error('Create Visitor / Check-In button DOM me nahi mila.');
+        }
+
+        // Form fields render hone ka wait karein
+        await page.waitForSelector('input[name="checkInDateTime"], input[name="roomNumber"]', { timeout: 15000 });
 
         // 1. Fill Booking Base Level Fields
         await page.evaluate(async (bData) => {
