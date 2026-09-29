@@ -93,6 +93,49 @@ async function downloadImage(url, destPath) {
     }
 }
 
+async function doLoginOnPage(page, sso_id, password) {
+    console.log('Session expire mila. Automatic re-login shuru kar rahe hain...');
+
+    // Top Login button par click karein agar homepage par hain
+    const topLoginBtn = page.locator('button:has-text("Login"), button.login-btn').first();
+    if (await topLoginBtn.isVisible({ timeout: 4000 }).catch(() => false)) {
+        await topLoginBtn.click();
+    }
+
+    const ssoInput = page.locator('input[placeholder="Enter SSO ID"]');
+    await ssoInput.waitFor({ timeout: 10000 });
+
+    // Captcha read karein
+    const captchaCode = await page.evaluate(() => {
+        const el = document.querySelector('.css-uayl0r');
+        if (el && el.innerText.trim()) return el.innerText.trim();
+        const captchaInput = document.querySelector('input[placeholder="Enter Captcha"]');
+        if (captchaInput) {
+            const parentBox = captchaInput.closest('.css-1tx38fa');
+            if (parentBox) {
+                const textDiv = parentBox.querySelector('.MuiBox-root');
+                if (textDiv) return textDiv.innerText.trim();
+            }
+        }
+        return null;
+    });
+
+    if (!captchaCode) {
+        throw new Error('Auto re-login ke time CAPTCHA DOM me nahi mila.');
+    }
+
+    await ssoInput.fill(sso_id);
+    await page.locator('input[placeholder="Enter Password"]').fill(password);
+    await page.locator('input[placeholder="Enter Captcha"]').fill(captchaCode);
+
+    await page.locator('button:has-text("Submit")').click();
+
+    // Login card gayab hone ka wait karein
+    await page.waitForFunction(() => !document.querySelector('.login-card'), { timeout: 12000 }).catch(() => null);
+    await page.waitForTimeout(2000);
+    console.log('Automatic re-login safal raha!');
+}
+
 async function sendCallback(callbackUrl, payload) {
     if (!callbackUrl) return false;
     try {
@@ -196,7 +239,7 @@ app.post('/login-evisitor', async (req, res) => {
 });
 
 // ---------------- CREATE VISITOR LOGIC ----------------
-async function processCreateVisitor(auth_storage, booking_data) {
+async function processCreateVisitor(auth_storage, booking_data, sso_credentials) {
     const visitorsUrl = 'https://evisitor.rajasthan.gov.in/evisitor/user/visitors';
     let context = null;
     let page = null;
@@ -243,8 +286,21 @@ async function processCreateVisitor(auth_storage, booking_data) {
         console.log('Navigating to Visitors Page...');
         await page.goto(visitorsUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-        if (page.url().includes('login') || !page.url().includes('/user/visitors')) {
-            throw new Error('Session expire ho gaya hai ya invalid auth data hai.');
+        // 🚨 AUTO RE-LOGIN CHECK: Agar URL me visitor page na ho YA Login button dikh raha ho
+        const isLoggedOut = page.url().includes('login') || 
+                            !page.url().includes('/user/visitors') || 
+                            (await page.locator('button:has-text("Login"), button.login-btn').first().isVisible({ timeout: 2500 }).catch(() => false));
+
+        if (isLoggedOut) {
+            console.log('User logged out mila. Re-login trigger kar rahe hain...');
+            if (sso_credentials && sso_credentials.sso_id && sso_credentials.password) {
+                await doLoginOnPage(page, sso_credentials.sso_id, sso_credentials.password);
+                
+                // Login ke baad dubara visitors page par navigate karein
+                await page.goto(visitorsUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+            } else {
+                throw new Error('Session expire ho gaya hai aur auto-login ke liye sso_credentials nahi mile.');
+            }
         }
 
         // ========================================================
@@ -253,26 +309,19 @@ async function processCreateVisitor(auth_storage, booking_data) {
         console.log('Checking for "Update Available" popup...');
         try {
             const updateBtn = page.locator('button:has-text("Update Now"), button:has-text("UPDATE NOW")').first();
-            
-            // 4 second tak check karenge agar update button dikhta hai
             if (await updateBtn.isVisible({ timeout: 4000 }).catch(() => false)) {
-                console.log('"Update Available" popup mila! "Update Now" par click kar rahe hain...');
+                console.log('"Update Available" popup mila! "Update Now" click kar rahe hain...');
                 await updateBtn.click();
-                
-                // Update Now dabane ke baad app reload ho sakti hai ya modal gayab hota hai
                 await page.waitForTimeout(3000);
                 await page.waitForLoadState('domcontentloaded').catch(() => null);
-            } else {
-                console.log('Update popup nahi aaya, aage badh rahe hain...');
             }
         } catch (popupErr) {
-            console.log('Update popup check completed/skipped.');
+            console.log('Update popup skipped.');
         }
 
-        // Agar koi modal ya backdrop abhi bhi bacha ho, toh use DOM se hata dein
+        // Modal backdrop cleanup
         await page.evaluate(() => {
-            const modals = document.querySelectorAll('.MuiDialog-root, .MuiModal-root');
-            modals.forEach(m => m.remove());
+            document.querySelectorAll('.MuiDialog-root, .MuiModal-root').forEach(m => m.remove());
         }).catch(() => null);
 
         await page.waitForTimeout(1000);
@@ -282,10 +331,8 @@ async function processCreateVisitor(auth_storage, booking_data) {
         // ========================================================
         console.log('Finding and clicking "CREATE VISITOR" button...');
         const createBtn = page.locator('button:has-text("CREATE VISITOR"), button:has-text("Create Visitor"), button:has-text("CHECK-IN")').first();
-        
         await createBtn.waitFor({ state: 'visible', timeout: 15000 });
 
-        // Direct DOM click + Playwright click fallback taaki kisi bhi haal me click trigger ho
         await page.evaluate(() => {
             const buttons = Array.from(document.querySelectorAll('button'));
             const btn = buttons.find(b => {
@@ -295,11 +342,8 @@ async function processCreateVisitor(auth_storage, booking_data) {
             if (btn) btn.click();
         });
 
-        // Form load hone ka wait karein
         await page.waitForSelector('input[name="checkInDateTime"], input[name="roomNumber"]', { timeout: 15000 });
         console.log('Create Visitor Form successfully opened!');
-
-        console.log('Filling Booking Level Details...');
         
         // 1. Fill Booking Base Level Fields
         await page.evaluate(async (bData) => {
@@ -491,33 +535,34 @@ async function selectMuiComboboxByKeyword(page, keyword, text) {
     }
 }
 
-// Background Task Execution
-app.post('/create-visitor', (req, res) => {
-    const { auth_storage, booking_data, callback_url } = req.body;
-    if (!booking_data || !booking_data.guests?.length) {
-        return res.status(400).json({ status: 'failed', message: 'Valid booking_data required hai.' });
-    }
-
+function startCreateVisitorBackground(auth_storage, booking_data, callback_url, sso_credentials) {
     setImmediate(async () => {
         try {
-            const result = await processCreateVisitor(auth_storage, booking_data);
+            const result = await processCreateVisitor(auth_storage, booking_data, sso_credentials);
             if (callback_url) {
-                await sendCallback(callback_url, {
-                    ...result,
-                    timestamp: new Date().toISOString()
-                });
+                await sendCallback(callback_url, { ...result, timestamp: new Date().toISOString() });
             }
-        } catch (err) {
+        } catch (error) {
             if (callback_url) {
                 await sendCallback(callback_url, {
                     status: 'failed',
-                    message: err.message,
+                    message: error.message,
                     timestamp: new Date().toISOString()
                 });
             }
         }
     });
+}
 
+// Background Task Execution
+app.post('/create-visitor', (req, res) => {
+    const { auth_storage, booking_data, callback_url, sso_credentials } = req.body;
+    if (!booking_data || !booking_data.guests?.length) {
+        return res.status(400).json({ status: 'failed', message: 'Valid booking_data required hai.' });
+    }
+
+    startCreateVisitorBackground(auth_storage, booking_data, callback_url, sso_credentials);
+    
     return res.status(202).json({
         status: 'processing',
         message: 'Automation queued successfully.',
