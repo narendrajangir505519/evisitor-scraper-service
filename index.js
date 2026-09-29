@@ -375,6 +375,7 @@ async function processCreateVisitor(auth_storage, booking_data) {
 
     } catch (error) {
         tempFiles.forEach(f => { try { fs.unlinkSync(f); } catch (e) {} });
+        
         let errorScreenshotBase64 = null;
         if (page && !page.isClosed()) {
             try {
@@ -382,8 +383,12 @@ async function processCreateVisitor(auth_storage, booking_data) {
                 errorScreenshotBase64 = buffer.toString('base64');
             } catch (e) {}
         }
-        if (context) await context.close();
-
+    
+        // Context close karein, sharedBrowser ko zinda rehne dein
+        if (context) {
+            try { await context.close(); } catch (e) {}
+        }
+    
         return {
             status: 'failed',
             message: error.message,
