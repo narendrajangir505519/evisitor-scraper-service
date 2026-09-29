@@ -424,15 +424,6 @@ async function processCreateVisitor(auth_storage, booking_data) {
 
         page = await context.newPage();
 
-        await page.route('**/*', (route) => {
-            const type = route.request().resourceType();
-            if (['image', 'font', 'media', 'stylesheet'].includes(type)) {
-                route.abort();
-            } else {
-                route.continue();
-            }
-        });
-
         await page.goto('https://evisitor.rajasthan.gov.in/evisitor', { waitUntil: 'commit' });
         if (storageData) {
             await page.evaluate((storage) => {
