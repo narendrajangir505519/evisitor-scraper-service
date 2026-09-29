@@ -267,6 +267,7 @@ async function processCreateVisitor(auth_storage, booking_data, sso_credentials)
             }
         });
 
+        await page.goto('https://evisitor.rajasthan.gov.in/evisitor', { waitUntil: 'domcontentloaded' });
         if (auth_storage) {
             await page.evaluate((storage) => {
                 if (storage.localStorage) {
