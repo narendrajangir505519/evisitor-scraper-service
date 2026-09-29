@@ -312,12 +312,26 @@ async function processCreateVisitor(auth_storage, booking_data, sso_credentials)
     const updatedPersonIds = [];
 
     try {
-        const browser = await getBrowser();
+        browser = await getBrowser();
 
         context = await browser.newContext({
             viewport: { width: 1280, height: 800 },
             timezoneId: 'Asia/Kolkata',
             serviceWorkers: 'block'
+        });
+
+        // 🚨 1. AUTO-KILLER: Jaise hi DOM me Update popup aaye, turant delete karein
+        await context.addInitScript(() => {
+            const observer = new MutationObserver(() => {
+                const modals = document.querySelectorAll('.MuiDialog-root, .MuiModal-root');
+                modals.forEach(m => {
+                    if (m.innerText && m.innerText.includes('Update Available')) {
+                        console.log('Update popup auto-killed from DOM');
+                        m.remove();
+                    }
+                });
+            });
+            observer.observe(document.documentElement, { childList: true, subtree: true });
         });
 
         // Storage un-nesting fix
@@ -345,7 +359,7 @@ async function processCreateVisitor(auth_storage, booking_data, sso_credentials)
 
         page = await context.newPage();
 
-        // Asset drop for speed
+        // Speed optimization: Drop media & fonts
         await page.route('**/*', (route) => {
             const resource = route.request().resourceType();
             if (['font', 'media', 'stylesheet'].includes(resource)) {
@@ -371,7 +385,7 @@ async function processCreateVisitor(auth_storage, booking_data, sso_credentials)
         console.log('Navigating to Visitors Page...');
         await page.goto(visitorsUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-        // 1. AUTO RE-LOGIN CHECK
+        // 🚨 2. AUTO RE-LOGIN CHECK
         const isLoggedOut = page.url().includes('login') || 
                             !page.url().includes('/user/visitors') || 
                             (await page.locator('button:has-text("Login"), button.login-btn').first().isVisible({ timeout: 2500 }).catch(() => false));
@@ -386,31 +400,37 @@ async function processCreateVisitor(auth_storage, booking_data, sso_credentials)
             }
         }
 
-        // 2. "Update Available" CHECK & DISMISS
-        try {
-            const updateBtn = page.locator('button:has-text("Update Now"), button:has-text("UPDATE NOW")').first();
-            if (await updateBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-                await updateBtn.click();
-                await page.waitForTimeout(2500);
-            }
-        } catch (e) {}
-
+        // 🚨 3. CLEAR ALL MODALS / BACKDROPS BEFORE CLICK
         await page.evaluate(() => {
-            document.querySelectorAll('.MuiDialog-root, .MuiModal-root').forEach(m => {
-                if (m.innerText && m.innerText.includes('Update Available')) m.remove();
+            document.querySelectorAll('.MuiDialog-root, .MuiModal-root, .MuiBackdrop-root').forEach(m => {
+                if (m.innerText && m.innerText.includes('Update Available')) {
+                    m.remove();
+                }
             });
         }).catch(() => null);
 
         await page.waitForTimeout(1000);
 
-        // 3. "CREATE VISITOR" CLICK
-        console.log('Clicking "CREATE VISITOR" button...');
+        // 🚨 4. FORCE CLICK CREATE VISITOR (No Timeout / No Backdrop Blocking)
+        console.log('Clicking "CREATE VISITOR" button with FORCE & DOM fallback...');
         const createBtn = page.locator('button:has-text("CREATE VISITOR"), button:has-text("Create Visitor"), button:has-text("CHECK-IN")').first();
-        await createBtn.waitFor({ state: 'visible', timeout: 15000 });
-        await createBtn.click();
+        await createBtn.waitFor({ state: 'attached', timeout: 15000 });
+
+        // Direct DOM click + force click (kisi bhi overlay/backdrop ko bypass karega)
+        await page.evaluate(() => {
+            const buttons = Array.from(document.querySelectorAll('button'));
+            const btn = buttons.find(b => {
+                const txt = (b.textContent || '').trim().toUpperCase();
+                return txt.includes('CREATE VISITOR') || txt.includes('CHECK-IN');
+            });
+            if (btn) btn.click();
+        });
+
+        // Agar DOM click trigger na hua ho toh Playwright force click karein
+        await createBtn.click({ force: true, timeout: 5000 }).catch(() => null);
 
         await page.waitForSelector('input[name="roomNumber"]', { timeout: 15000 });
-
+        console.log('Create Visitor Form successfully opened!');
         // 4. ROOM & BASE DETAILS FILLING
         console.log('Filling Room & Base Details...');
         if (booking_data.room_number) {
