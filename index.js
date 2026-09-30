@@ -1,8 +1,7 @@
 process.env.TZ = 'Asia/Kolkata';
 
 const express = require('express');
-const { chromium } = require('playwright-core');
-const sparticuzChromium = require('@sparticuz/chromium');
+const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
