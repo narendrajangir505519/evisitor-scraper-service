@@ -437,29 +437,105 @@ async function processCreateVisitor(auth_storage, booking_data) {
         }
 
         const clickButtonSmart = async ({ texts, fallbackIndex = null, label }) => {
+
+            // 1. FIRST PRIORITY: Button Index
+            if (fallbackIndex !== null) {
+                console.log(
+                    `${label}: pehle button index ${fallbackIndex} check kar rahe hain...`
+                );
+        
+                const indexResult = await page.evaluate((idx) => {
+                    const buttons = Array.from(document.querySelectorAll('button'));
+                    const btn = buttons[idx];
+        
+                    if (!btn) {
+                        return {
+                            clicked: false,
+                            reason: 'button_not_found'
+                        };
+                    }
+        
+                    const rect = btn.getBoundingClientRect();
+        
+                    const isVisible =
+                        rect.width > 0 &&
+                        rect.height > 0;
+        
+                    if (!isVisible) {
+                        return {
+                            clicked: false,
+                            reason: 'button_not_visible'
+                        };
+                    }
+        
+                    if (btn.disabled) {
+                        return {
+                            clicked: false,
+                            reason: 'button_disabled'
+                        };
+                    }
+        
+                    btn.scrollIntoView({
+                        behavior: 'instant',
+                        block: 'center'
+                    });
+        
+                    btn.click();
+        
+                    return {
+                        clicked: true,
+                        text: (btn.textContent || '').trim()
+                    };
+        
+                }, fallbackIndex);
+        
+                if (indexResult.clicked) {
+                    console.log(
+                        `${label}: button index ${fallbackIndex} se click ho gaya. Button text: "${indexResult.text}"`
+                    );
+        
+                    return true;
+                }
+        
+                console.warn(
+                    `${label}: button index ${fallbackIndex} fail hua (${indexResult.reason}). Ab text selector try karenge.`
+                );
+            }
+        
+        
+            // 2. SECOND PRIORITY: Text Selector
             for (const text of texts) {
-                const btn = page.getByRole('button', { name: text, exact: false }).first();
-                if (await btn.isVisible({ timeout: 1200 }).catch(() => false)) {
+        
+                const btn = page
+                    .getByRole('button', {
+                        name: text,
+                        exact: false
+                    })
+                    .first();
+        
+                if (
+                    await btn
+                        .isVisible({ timeout: 1200 })
+                        .catch(() => false)
+                ) {
+        
                     await btn.scrollIntoViewIfNeeded();
+        
                     await btn.click();
+        
+                    console.log(
+                        `${label}: text selector se click ho gaya: ${text}`
+                    );
+        
                     return true;
                 }
             }
-
-            if (fallbackIndex !== null) {
-                console.warn(`${label}: text selector nahi mila, fallback button index ${fallbackIndex} use ho raha hai.`);
-                const clicked = await page.evaluate((idx) => {
-                    const buttons = Array.from(document.querySelectorAll('button'));
-                    const btn = buttons[idx];
-                    if (!btn) return false;
-                    btn.scrollIntoView({ behavior: 'instant', block: 'center' });
-                    btn.click();
-                    return true;
-                }, fallbackIndex);
-                if (clicked) return true;
-            }
-
-            throw new Error(`${label} button DOM me nahi mila.`);
+        
+        
+            // 3. DONO FAIL
+            throw new Error(
+                `${label} button DOM me nahi mila. Index ${fallbackIndex} aur text selector dono fail.`
+            );
         };
 
         // Check if Modal is already open
