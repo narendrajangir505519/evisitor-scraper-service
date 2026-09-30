@@ -16,7 +16,7 @@ app.use(express.json({ limit: '50mb' }));
 const FIXED_BASE_URL = 'https://ballyfin.in';
 
 const axiosInstance = axios.create({
-    httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+    httpsAgent: new https.Agent({ rejectUnauthorized: process.env.ALLOW_INSECURE_TLS === 'true' ? false : true }),
     timeout: 20000
 });
 
@@ -226,7 +226,7 @@ app.post('/login-evisitor', async (req, res) => {
 
         await page.route('**/*', (route) => {
             const type = route.request().resourceType();
-            if (['image', 'font', 'media', 'stylesheet'].includes(type)) {
+            if (['image', 'font', 'media'].includes(type)) {
                 route.abort();
             } else {
                 route.continue();
@@ -314,8 +314,8 @@ app.post('/login-evisitor', async (req, res) => {
         const allCookies = await context.cookies();
 
         const authStorage = await page.evaluate(() => {
-            let localData = {};
-            let sessionData = {};
+            const localData = {};
+            const sessionData = {};
 
             for (let i = 0; i < localStorage.length; i++) {
                 const key = localStorage.key(i);
@@ -332,6 +332,10 @@ app.post('/login-evisitor', async (req, res) => {
                 sessionStorage: sessionData
             };
         });
+
+        // IMPORTANT: visitor automation ko complete authenticated session chahiye.
+        // Sirf local/session storage enough nahi hota; cookies bhi restore honi chahiye.
+        authStorage.cookies = allCookies;
 
         await context.close();
 
@@ -377,6 +381,12 @@ async function processCreateVisitor(auth_storage, booking_data) {
         }
 
         if (storageData) {
+            // Restore cookies first. This is required if the portal keeps login in cookies.
+            if (Array.isArray(storageData.cookies) && storageData.cookies.length > 0) {
+                await context.addCookies(storageData.cookies);
+            }
+
+            // Restore localStorage/sessionStorage on every document navigation.
             await context.addInitScript((storage) => {
                 try {
                     if (storage.localStorage) {
@@ -398,7 +408,7 @@ async function processCreateVisitor(auth_storage, booking_data) {
         console.log('Navigating to base portal...');
         try {
             await page.goto('https://evisitor.rajasthan.gov.in/evisitor', { 
-                waitUntil: 'commit', 
+                waitUntil: 'domcontentloaded', 
                 timeout: 30000 
             });
         } catch (e) {}
@@ -415,32 +425,68 @@ async function processCreateVisitor(auth_storage, booking_data) {
         }
 
         console.log('Navigating to Visitors Page...');
-        await page.goto(visitorsUrl, { waitUntil: 'commit', timeout: 45000 });
+        await page.goto(visitorsUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
 
         await page.waitForSelector('body', { timeout: 15000 });
         await page.waitForTimeout(1000);
+
+        // Fail fast if restored auth is invalid/expired and portal redirects to login.
+        const loginVisible = await page.locator('input[placeholder="Enter SSO ID"]').isVisible({ timeout: 1500 }).catch(() => false);
+        if (loginVisible || /login/i.test(page.url())) {
+            throw new Error('EVISITOR_SESSION_EXPIRED: auth_storage/cookies invalid ya expire ho chuke hain. Pehle /login-evisitor dobara call karein.');
+        }
+
+        const clickButtonSmart = async ({ texts, fallbackIndex = null, label }) => {
+            for (const text of texts) {
+                const btn = page.getByRole('button', { name: text, exact: false }).first();
+                if (await btn.isVisible({ timeout: 1200 }).catch(() => false)) {
+                    await btn.scrollIntoViewIfNeeded();
+                    await btn.click();
+                    return true;
+                }
+            }
+
+            if (fallbackIndex !== null) {
+                console.warn(`${label}: text selector nahi mila, fallback button index ${fallbackIndex} use ho raha hai.`);
+                const clicked = await page.evaluate((idx) => {
+                    const buttons = Array.from(document.querySelectorAll('button'));
+                    const btn = buttons[idx];
+                    if (!btn) return false;
+                    btn.scrollIntoView({ behavior: 'instant', block: 'center' });
+                    btn.click();
+                    return true;
+                }, fallbackIndex);
+                if (clicked) return true;
+            }
+
+            throw new Error(`${label} button DOM me nahi mila.`);
+        };
 
         // Check if Modal is already open
         let isModalOpen = await page.evaluate(() => !!document.querySelector('input[name="roomNumber"]'));
 
         if (!isModalOpen) {
-            console.log('Modal band hai. Button Index 2 (Create Visitor) click kar rahe hain...');
-            await page.evaluate(() => {
-                const buttons = Array.from(document.querySelectorAll('button'));
-                const targetBtn = buttons[2] || buttons.find(b => {
-                    const txt = (b.textContent || '').trim().toLowerCase();
-                    return txt.includes('create visitor') || txt.includes('create check-in') || txt.includes('check-in');
+            console.log('Modal band hai. Create Visitor button click kar rahe hain...');
+            try {
+                await clickButtonSmart({
+                    texts: [/create visitor/i, /create check-?in/i, /^check-?in$/i],
+                    fallbackIndex: 2,
+                    label: 'Create Visitor'
                 });
-
-                if (targetBtn) {
-                    targetBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
-                    targetBtn.click();
+            } catch (buttonError) {
+                const visitorsMenu = page.getByText('Visitors', { exact: true }).first();
+                if (await visitorsMenu.isVisible({ timeout: 1500 }).catch(() => false)) {
+                    await visitorsMenu.click();
+                    await page.waitForTimeout(500);
+                    await clickButtonSmart({
+                        texts: [/create visitor/i, /create check-?in/i, /^check-?in$/i],
+                        fallbackIndex: 2,
+                        label: 'Create Visitor'
+                    });
                 } else {
-                    const sideItem = Array.from(document.querySelectorAll('.MuiListItemButton-root, div[role="button"]'))
-                        .find(el => el.textContent.includes('Visitors'));
-                    if (sideItem) sideItem.click();
+                    throw buttonError;
                 }
-            });
+            }
 
             await page.waitForSelector('input[name="roomNumber"]', { state: 'visible', timeout: 15000 });
         } else {
@@ -613,14 +659,12 @@ async function processCreateVisitor(auth_storage, booking_data) {
                 }
             }
 
-            // Click "Add" button using Index 4
-            console.log(`Clicking 'Add' button at Index 4 for Guest ${i + 1}...`);
-            await page.evaluate(() => {
-                const buttons = Array.from(document.querySelectorAll('button'));
-                const addBtn = buttons[4] || buttons.find(b => b.textContent.trim() === 'Add');
-                if (!addBtn) throw new Error('"Add" button DOM me nahi mila.');
-                addBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
-                addBtn.click();
+            // Add guest: text-based selector first; numeric index only compatibility fallback.
+            console.log(`Clicking 'Add' for Guest ${i + 1}...`);
+            await clickButtonSmart({
+                texts: [/^add$/i, /add guest/i, /add visitor/i],
+                fallbackIndex: 4,
+                label: `Guest ${i + 1} Add`
             });
 
             await page.waitForTimeout(1000);
@@ -640,24 +684,54 @@ async function processCreateVisitor(auth_storage, booking_data) {
             }
         }
 
-        // 3. FINAL SUBMIT CHECK-IN (Index 6)
-        console.log('Submitting Final Check-In using Button Index 6...');
-        await page.evaluate(() => {
-            const buttons = Array.from(document.querySelectorAll('button'));
-            const submitBtn = buttons[6] || buttons.find(b => b.textContent.trim().includes('Submit Check-In'));
-            if (!submitBtn) throw new Error('"Submit Check-In" button DOM me nahi mila.');
-            submitBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
-            submitBtn.click();
+        // 3. FINAL SUBMIT CHECK-IN
+        console.log('Submitting Final Check-In...');
+        await clickButtonSmart({
+            texts: [/submit check-?in/i, /^submit$/i],
+            fallbackIndex: 6,
+            label: 'Submit Check-In'
         });
 
-        let toastMessage = 'Visitor check-in submitted successfully.';
+        let toastMessage = '';
+        let toastIsError = false;
         try {
-            await page.waitForSelector('.Toastify__toast', { timeout: 6000 });
-            toastMessage = await page.evaluate(() => document.querySelector('.Toastify__toast')?.innerText.trim() || 'Submitted');
-        } catch (e) {}
+            await page.waitForSelector('.Toastify__toast', { timeout: 8000 });
+            const toast = await page.evaluate(() => {
+                const el = document.querySelector('.Toastify__toast');
+                if (!el) return { message: '', isError: false, isSuccess: false };
+                const message = (el.innerText || '').trim();
+                const cls = el.className || '';
+                return {
+                    message,
+                    isError: cls.includes('Toastify__toast--error') || /error|failed|invalid|required/i.test(message),
+                    isSuccess: cls.includes('Toastify__toast--success') || /success|successful|submitted|created/i.test(message)
+                };
+            });
+            toastMessage = toast.message;
+            toastIsError = toast.isError;
+        } catch (e) {
+            console.warn('Final submit toast nahi mila; DOM state verify kar rahe hain.');
+        }
+
+        if (toastIsError) {
+            throw new Error(`Final check-in failed: ${toastMessage}`);
+        }
+
+        // If no success toast came, make sure validation errors are not present.
+        const finalErrors = await page.evaluate(() => {
+            return Array.from(document.querySelectorAll('.Mui-error, .MuiFormHelperText-root.Mui-error'))
+                .map(e => (e.innerText || '').trim())
+                .filter(Boolean);
+        });
+        if (finalErrors.length > 0) {
+            throw new Error(`Final check-in validation failed: ${[...new Set(finalErrors)].join(' | ')}`);
+        }
+
+        if (!toastMessage) toastMessage = 'Visitor check-in submitted; no error was reported by the page.';
 
         tempFiles.forEach(f => { try { fs.unlinkSync(f); } catch (e) {} });
         await context.close();
+        context = null;
 
         return { status: 'success', message: toastMessage, updated_person_ids: updatedPersonIds };
     } catch (error) {
@@ -673,7 +747,7 @@ async function processCreateVisitor(auth_storage, booking_data) {
             }
         }
 
-        if (context) await context.close();
+        if (context) { try { await context.close(); } catch (e) {} }
 
         return { 
             status: 'failed', 
@@ -700,24 +774,53 @@ app.post('/create-visitor', async (req, res) => {
 
         console.log('Create visitor request received. Guests:', booking_data.guests.length);
 
-        startCreateVisitorBackground(auth_storage, booking_data, callback_url);
+        // IMPORTANT FOR CLOUD RUN:
+        // Work ko HTTP response ke baad setImmediate/background me mat chalao.
+        // Request ko open rakho, automation complete karo, phir response/callback bhejo.
+        const result = await processCreateVisitor(auth_storage, booking_data);
 
-        return res.status(202).json({
-            status: 'processing',
-            message: 'Visitor automation background mein start ho gayi hai.',
+        if (callback_url) {
+            await sendCallback(callback_url, {
+                status: result.status,
+                message: result.message || '',
+                updated_person_ids: result.updated_person_ids || [],
+                screenshot: result.screenshot || null,
+                error_screenshot: result.error_screenshot || null,
+                timestamp: new Date().toISOString()
+            });
+        }
+
+        const httpStatus = result.status === 'success' ? 200 : 422;
+        return res.status(httpStatus).json({
+            ...result,
             callback_enabled: !!callback_url,
-            guests: booking_data.guests.length,
             timestamp: new Date().toISOString()
         });
     } catch (error) {
         console.error('Create visitor request error:', error.message);
         return res.status(500).json({
             status: 'failed',
-            message: error.message || 'Unable to start visitor automation.'
+            message: error.message || 'Visitor automation failed.'
         });
     }
 });
 
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server is running on port ${PORT}`);
 });
+
+server.setTimeout(0);
+
+async function shutdown(signal) {
+    console.log(`${signal} received. Closing browser/server...`);
+    try {
+        if (sharedBrowser && sharedBrowser.isConnected()) await sharedBrowser.close();
+    } catch (e) {
+        console.error('Browser close error:', e.message);
+    }
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 5000).unref();
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
