@@ -1,17 +1,14 @@
 {
-  "name": "evisitor-playwright-service",
+  "name": "evisitor-scraper-service",
   "version": "1.0.0",
+  "description": "E-Visitor Portal Playwright Automation Service",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "@sparticuz/chromium": "^123.0.0",
     "axios": "^1.6.8",
     "express": "^4.19.2",
-    "playwright-core": "^1.43.0"
-  },
-  "engines": {
-    "node": ">=18.0.0"
+    "playwright": "^1.43.0"
   }
 }
