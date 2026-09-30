@@ -136,20 +136,15 @@ async function getBrowser() {
 
     browserStarting = (async () => {
         const browser = await chromium.launch({
-            headless: true,
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--no-first-run',
-                '--disable-background-networking',
-                '--disable-default-apps',
-                '--disable-extensions',
-                '--disable-sync',
-                '--mute-audio'
-            ]
-        });
+        headless: true,
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--no-first-run'
+        ]
+    });
 
         browser.on('disconnected', () => {
             console.log('Browser disconnected, resetting reference...');
