@@ -286,6 +286,9 @@ app.post('/login-evisitor', async (req, res) => {
 
         const page = await browser.newPage();
 
+        page.setDefaultNavigationTimeout(90000);
+        page.setDefaultTimeout(90000);
+
         await page.setCacheEnabled(true);
         await page.setRequestInterception(true);
 
