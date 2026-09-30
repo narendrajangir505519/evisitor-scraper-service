@@ -163,7 +163,198 @@ async function downloadImage(url, destPath) {
     }
 }
 
+// -------------------------------------------------------------
+// SCRAPE ENDPOINT
+// -------------------------------------------------------------
+app.all('/scrape', async (req, res) => {
+    const targetUrl = req.query.url || req.body.url;
+
+    if (!targetUrl) {
+        return res.status(400).json({ error: 'URL parameter missing hai' });
+    }
+
+    let browser = null;
+    let context = null;
+
+    try {
+        browser = await getBrowser();
+        context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+        const page = await context.newPage();
+
+        await page.route('**/*', (route) => {
+            const resource = route.request().resourceType();
+            if (['image', 'stylesheet', 'font', 'media'].includes(resource)) {
+                route.abort();
+            } else {
+                route.continue();
+            }
+        });
+
+        await page.goto(targetUrl, { 
+            waitUntil: 'domcontentloaded', 
+            timeout: 30000 
+        });
+
+        try {
+            await page.waitForSelector('body', { timeout: 5000 });
+        } catch (e) {
+            console.log('Element wait timeout, proceeding anyway...');
+        }
+
+        const htmlContent = await page.content();
+        await context.close();
+
+        return res.send(htmlContent);
+    } catch (error) {
+        if (context) await context.close();
+        return res.status(500).json({ error: 'Automation Error: ' + error.message });
+    }
+});
+
+// -------------------------------------------------------------
+// LOGIN EVISITOR ENDPOINT (SESSION GENERATOR)
+// -------------------------------------------------------------
+app.post('/login-evisitor', async (req, res) => {
+    const { url, sso_id, password } = req.body;
+    const loginBaseUrl = url || 'https://evisitor.rajasthan.gov.in/evisitor';
+    let context = null;
+
+    try {
+        const browser = await getBrowser();
+        context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+        const page = await context.newPage();
+
+        await page.route('**/*', (route) => {
+            const type = route.request().resourceType();
+            if (['image', 'font', 'media', 'stylesheet'].includes(type)) {
+                route.abort();
+            } else {
+                route.continue();
+            }
+        });
+
+        console.log('Navigating to login page. Starting login automation...');
+        await page.goto(loginBaseUrl, { waitUntil: 'load', timeout: 35000 });
+
+        const topLoginBtn = page.locator('button.login-btn').first();
+        if (await topLoginBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+            await topLoginBtn.click();
+        }
+
+        const ssoInput = page.locator('input[placeholder="Enter SSO ID"]');
+        await ssoInput.waitFor({ timeout: 10000 });
+
+        try {
+            await page.waitForSelector('.css-uayl0r', { timeout: 3000 });
+        } catch (e) {
+            console.log('Captcha selector wait timeout, evaluating DOM...');
+        }
+
+        const captchaCode = await page.evaluate(() => {
+            const el = document.querySelector('.css-uayl0r');
+            if (el && el.innerText.trim()) return el.innerText.trim();
+
+            const captchaInput = document.querySelector('input[placeholder="Enter Captcha"]');
+            if (captchaInput) {
+                const parentBox = captchaInput.closest('.css-1tx38fa');
+                if (parentBox) {
+                    const textDiv = parentBox.querySelector('.MuiBox-root');
+                    if (textDiv) return textDiv.innerText.trim();
+                }
+            }
+            return null;
+        });
+
+        if (!captchaCode) {
+            throw new Error('CAPTCHA code DOM me load nahi ho paya. Refresh karke try karein.');
+        }
+
+        await page.click('input[placeholder="Enter SSO ID"]', { clickCount: 3 });
+        await page.locator('input[placeholder="Enter SSO ID"]').fill(sso_id);
+
+        await page.click('input[placeholder="Enter Password"]', { clickCount: 3 });
+        await page.locator('input[placeholder="Enter Password"]').fill(password);
+
+        await page.click('input[placeholder="Enter Captcha"]', { clickCount: 3 });
+        await page.locator('input[placeholder="Enter Captcha"]').fill(captchaCode);
+
+        const submitBtn = page.locator('button:has-text("Submit")').first();
+        if (await submitBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+            await submitBtn.click();
+        }
+
+        let toastData = { success: false, message: '' };
+        try {
+            await page.waitForSelector('.Toastify__toast', { timeout: 4000 });
+            toastData = await page.evaluate(() => {
+                const toastEl = document.querySelector('.Toastify__toast');
+                if (!toastEl) return { success: false, message: '' };
+                const text = toastEl.innerText ? toastEl.innerText.trim() : '';
+                const isSuccessClass = toastEl.classList.contains('Toastify__toast--success');
+                const isSuccessText = text.toLowerCase().includes('success') || text.toLowerCase().includes('successful');
+                return { success: isSuccessClass || isSuccessText, message: text };
+            });
+        } catch (e) {
+            console.log('Toast wait complete.');
+        }
+
+        if (toastData.message && !toastData.success) {
+            await context.close();
+            return res.status(400).json({
+                status: 'login_failed',
+                toast_message: toastData.message,
+                captcha_used: captchaCode
+            });
+        }
+
+        await page.waitForFunction(() => !document.querySelector('.login-card'), { timeout: 10000 }).catch(() => null);
+        await new Promise(resolve => setTimeout(resolve, 4000));
+
+        const nextPageHtml = await page.content();
+        const allCookies = await context.cookies();
+
+        const authStorage = await page.evaluate(() => {
+            let localData = {};
+            let sessionData = {};
+
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                localData[key] = localStorage.getItem(key);
+            }
+
+            for (let i = 0; i < sessionStorage.length; i++) {
+                const key = sessionStorage.key(i);
+                sessionData[key] = sessionStorage.getItem(key);
+            }
+
+            return {
+                localStorage: localData,
+                sessionStorage: sessionData
+            };
+        });
+
+        await context.close();
+
+        return res.json({
+            status: 'success',
+            toast_message: toastData.message || 'Login Successful',
+            captcha_used: captchaCode,
+            cookies: allCookies,
+            auth_storage: authStorage,
+            next_page_html: nextPageHtml
+        });
+    } catch (error) {
+        if (context) await context.close();
+        return res.status(500).json({
+            status: 'error',
+            message: error.message
+        });
+    }
+});
+
+// -------------------------------------------------------------
 // CREATE VISITOR AUTOMATION MAIN ENGINE
+// -------------------------------------------------------------
 async function processCreateVisitor(auth_storage, booking_data) {
     const visitorsUrl = 'https://evisitor.rajasthan.gov.in/evisitor/user/visitors';
     let browser = null;
@@ -226,7 +417,6 @@ async function processCreateVisitor(auth_storage, booking_data) {
         console.log('Navigating to Visitors Page...');
         await page.goto(visitorsUrl, { waitUntil: 'commit', timeout: 45000 });
 
-        // Wait for basic container
         await page.waitForSelector('body', { timeout: 15000 });
         await page.waitForTimeout(1000);
 
@@ -234,10 +424,9 @@ async function processCreateVisitor(auth_storage, booking_data) {
         let isModalOpen = await page.evaluate(() => !!document.querySelector('input[name="roomNumber"]'));
 
         if (!isModalOpen) {
-            console.log('Modal is not open. Clicking button at Index 2 (Create Visitor)...');
+            console.log('Modal band hai. Button Index 2 (Create Visitor) click kar rahe hain...');
             await page.evaluate(() => {
                 const buttons = Array.from(document.querySelectorAll('button'));
-                // Index 2 target with fallback to text matching
                 const targetBtn = buttons[2] || buttons.find(b => {
                     const txt = (b.textContent || '').trim().toLowerCase();
                     return txt.includes('create visitor') || txt.includes('create check-in') || txt.includes('check-in');
@@ -247,20 +436,17 @@ async function processCreateVisitor(auth_storage, booking_data) {
                     targetBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
                     targetBtn.click();
                 } else {
-                    // Fallback to sidebar visitors item
                     const sideItem = Array.from(document.querySelectorAll('.MuiListItemButton-root, div[role="button"]'))
                         .find(el => el.textContent.includes('Visitors'));
                     if (sideItem) sideItem.click();
                 }
             });
 
-            // Wait for Modal to open
             await page.waitForSelector('input[name="roomNumber"]', { state: 'visible', timeout: 15000 });
         } else {
-            console.log('Modal is already open. Skipping Create Visitor button click.');
+            console.log('Modal pehle se open hai. Direct form fill shuru kar rahe hain.');
         }
 
-        // Helper functions for filling React Controlled inputs and MUI Select Dropdowns
         const fillReactInput = async (selector, value) => {
             if (value === undefined || value === null || value === '') return;
             await page.waitForSelector(selector, { state: 'visible', timeout: 7000 });
@@ -427,7 +613,7 @@ async function processCreateVisitor(auth_storage, booking_data) {
                 }
             }
 
-            // Click "Add" button using Index 4 with Text fallback
+            // Click "Add" button using Index 4
             console.log(`Clicking 'Add' button at Index 4 for Guest ${i + 1}...`);
             await page.evaluate(() => {
                 const buttons = Array.from(document.querySelectorAll('button'));
@@ -437,7 +623,6 @@ async function processCreateVisitor(auth_storage, booking_data) {
                 addBtn.click();
             });
 
-            // Check for Form Errors after clicking Add
             await page.waitForTimeout(1000);
             const errors = await page.evaluate(() => {
                 return Array.from(document.querySelectorAll('.Mui-error, .MuiFormHelperText-root.Mui-error'))
@@ -455,7 +640,7 @@ async function processCreateVisitor(auth_storage, booking_data) {
             }
         }
 
-        // 3. FINAL SUBMIT CHECK-IN (Index 6 with Text fallback)
+        // 3. FINAL SUBMIT CHECK-IN (Index 6)
         console.log('Submitting Final Check-In using Button Index 6...');
         await page.evaluate(() => {
             const buttons = Array.from(document.querySelectorAll('button'));
@@ -465,7 +650,6 @@ async function processCreateVisitor(auth_storage, booking_data) {
             submitBtn.click();
         });
 
-        // Wait for Toast notification
         let toastMessage = 'Visitor check-in submitted successfully.';
         try {
             await page.waitForSelector('.Toastify__toast', { timeout: 6000 });
@@ -499,6 +683,9 @@ async function processCreateVisitor(auth_storage, booking_data) {
     }
 }
 
+// -------------------------------------------------------------
+// POST /create-visitor ENTRYPOINT
+// -------------------------------------------------------------
 app.post('/create-visitor', async (req, res) => {
     try {
         const { auth_storage, booking_data, callback_url } = req.body;
