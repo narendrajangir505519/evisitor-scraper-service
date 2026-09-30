@@ -639,30 +639,49 @@ async function processCreateVisitor(auth_storage, booking_data) {
             }
 
             // Document File Upload
-            let docUrl = guest.document_url || guest.document_url_2 || null;
-            if (docUrl) {
+            const documentUrls = [
+                guest.document_url,
+                guest.document_url_2
+            ].filter(Boolean);
+            
+            const localDocPaths = [];
+            
+            for (let d = 0; d < documentUrls.length; d++) {
+                let docUrl = documentUrls[d];
+            
                 if (typeof docUrl === 'string' && docUrl.startsWith('/')) {
                     docUrl = `${FIXED_BASE_URL}${docUrl}`;
                 }
-
+            
                 if (typeof docUrl === 'string' && docUrl.startsWith('http')) {
                     const ext = docUrl.toLowerCase().endsWith('.pdf') ? 'pdf' : 'jpg';
-                    const localDocPath = path.join('/tmp', `doc_g${i + 1}_${Date.now()}.${ext}`);
+            
+                    const localDocPath = path.join(
+                        '/tmp',
+                        `doc_g${i + 1}_${d + 1}_${Date.now()}.${ext}`
+                    );
+            
                     const ok = await downloadImage(docUrl, localDocPath);
-
+            
                     if (ok && fs.existsSync(localDocPath)) {
                         const stats = fs.statSync(localDocPath);
+            
                         if (stats.size < 26000) {
                             const padding = Buffer.alloc(26000 - stats.size, 0);
                             fs.appendFileSync(localDocPath, padding);
                         }
+            
                         tempFiles.push(localDocPath);
-
-                        const fileInput = page.locator('input[type="file"]').first();
-                        await fileInput.setInputFiles(localDocPath);
-                        await page.waitForTimeout(800);
+                        localDocPaths.push(localDocPath);
                     }
                 }
+            }
+            
+            if (localDocPaths.length > 0) {
+                const fileInput = page.locator('input[type="file"]').first();
+            
+                await fileInput.setInputFiles(localDocPaths);
+                await page.waitForTimeout(1000);
             }
 
             // Add guest: text-based selector first; numeric index only compatibility fallback.
