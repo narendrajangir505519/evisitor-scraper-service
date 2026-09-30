@@ -437,7 +437,7 @@ async function processCreateVisitor(auth_storage, booking_data) {
         }
 
         console.log('Navigating to Visitors Page...');
-        await page.goto(visitorsUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await page.goto(visitorsUrl, { waitUntil: 'commit', timeout: 60000 });
 
         if (page.url().includes('login') || !page.url().includes('/user/visitors')) {
             throw new Error('Session expire ho gaya hai ya invalid auth data hai.');
