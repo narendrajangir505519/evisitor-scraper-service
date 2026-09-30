@@ -1,4 +1,3 @@
-cat << 'EOF' > Dockerfile
 FROM mcr.microsoft.com/playwright:v1.43.0-jammy
 
 WORKDIR /app
@@ -12,4 +11,3 @@ ENV PORT=8080
 EXPOSE 8080
 
 CMD ["node", "index.js"]
-EOF
