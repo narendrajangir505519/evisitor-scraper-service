@@ -127,7 +127,7 @@ app.get('/debug-view', async (req, res) => {
         });
         const page = await browser.newPage();
         await page.goto('https://evisitor.rajasthan.gov.in/evisitor', {
-            waitUntil: 'commit',
+            waitUntil: 'domcontentloaded',
             timeout: 60000
         });
         const screenshotBuffer = await page.screenshot({ fullPage: true });
@@ -204,9 +204,14 @@ async function processCreateVisitor(auth_storage, booking_data) {
 
         page = await context.newPage();
 
-        console.log('Opening base portal to verify session...');
-        await page.goto('https://evisitor.rajasthan.gov.in/evisitor', { waitUntil: 'commit' });
-        
+        console.log('Navigating to base portal...');
+        try {
+            await page.goto('https://evisitor.rajasthan.gov.in/evisitor', { 
+                waitUntil: 'commit', 
+                timeout: 30000 
+            });
+        } catch (e) {}
+
         if (storageData) {
             await page.evaluate((storage) => {
                 if (storage.localStorage) {
@@ -218,31 +223,42 @@ async function processCreateVisitor(auth_storage, booking_data) {
             }, storageData);
         }
 
-        console.log('Navigating directly to Visitors Management Page...');
-        await page.goto(visitorsUrl, { waitUntil: 'commit', timeout: 60000 });
+        console.log('Navigating to Visitors Page...');
+        await page.goto(visitorsUrl, { waitUntil: 'commit', timeout: 45000 });
 
-        if (page.url().includes('login') || !page.url().includes('/user/visitors')) {
-            throw new Error('Session expire ho gaya hai ya invalid auth data hai.');
+        // Wait for basic container
+        await page.waitForSelector('body', { timeout: 15000 });
+        await page.waitForTimeout(1000);
+
+        // Check if Modal is already open
+        let isModalOpen = await page.evaluate(() => !!document.querySelector('input[name="roomNumber"]'));
+
+        if (!isModalOpen) {
+            console.log('Modal is not open. Clicking button at Index 2 (Create Visitor)...');
+            await page.evaluate(() => {
+                const buttons = Array.from(document.querySelectorAll('button'));
+                // Index 2 target with fallback to text matching
+                const targetBtn = buttons[2] || buttons.find(b => {
+                    const txt = (b.textContent || '').trim().toLowerCase();
+                    return txt.includes('create visitor') || txt.includes('create check-in') || txt.includes('check-in');
+                });
+
+                if (targetBtn) {
+                    targetBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
+                    targetBtn.click();
+                } else {
+                    // Fallback to sidebar visitors item
+                    const sideItem = Array.from(document.querySelectorAll('.MuiListItemButton-root, div[role="button"]'))
+                        .find(el => el.textContent.includes('Visitors'));
+                    if (sideItem) sideItem.click();
+                }
+            });
+
+            // Wait for Modal to open
+            await page.waitForSelector('input[name="roomNumber"]', { state: 'visible', timeout: 15000 });
+        } else {
+            console.log('Modal is already open. Skipping Create Visitor button click.');
         }
-
-        // Close any notification or update modal
-        try {
-            const updateBtn = page.locator('button:has-text("Update Now"), button:has-text("UPDATE NOW")').first();
-            if (await updateBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-                await updateBtn.click();
-                await page.waitForTimeout(1500);
-            }
-        } catch (e) {}
-
-        // Click Create Check-In / Create Visitor button on the page
-        console.log('Looking for Create Check-In / Create Visitor button...');
-        const createBtn = page.locator('button:has-text("Create Check-In"), button:has-text("CREATE VISITOR"), button:has-text("Create Visitor")').first();
-        await createBtn.waitFor({ state: 'visible', timeout: 15000 });
-        await createBtn.click();
-
-        // Verify Modal Opened
-        await page.waitForSelector('.MuiModal-root', { state: 'visible', timeout: 10000 });
-        await page.waitForTimeout(800);
 
         // Helper functions for filling React Controlled inputs and MUI Select Dropdowns
         const fillReactInput = async (selector, value) => {
@@ -269,7 +285,6 @@ async function processCreateVisitor(auth_storage, booking_data) {
             await dropdown.click();
             await page.waitForTimeout(300);
 
-            // Wait for listbox options to render
             await page.waitForSelector('li[role="option"]', { state: 'visible', timeout: 7000 });
             const optionClicked = await page.evaluate((textToMatch) => {
                 const norm = v => String(v || '').replace(/\u200B/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -290,9 +305,8 @@ async function processCreateVisitor(auth_storage, booking_data) {
             }, targetText);
 
             if (!optionClicked) {
-                // Close dropdown if no match found
                 await page.keyboard.press('Escape');
-                console.warn(`Dropdown option "${targetText}" nahi mila for #${dropdownId}`);
+                console.warn(`Dropdown option "${targetText}" not found for #${dropdownId}`);
             }
             await page.waitForTimeout(300);
         };
@@ -304,7 +318,6 @@ async function processCreateVisitor(auth_storage, booking_data) {
         }
 
         if (booking_data.check_in_date_time) {
-            // Ensure format YYYY-MM-DDTHH:mm
             let formattedCheckIn = booking_data.check_in_date_time;
             if (formattedCheckIn.includes(' ') && !formattedCheckIn.includes('T')) {
                 formattedCheckIn = formattedCheckIn.replace(' ', 'T');
@@ -336,20 +349,16 @@ async function processCreateVisitor(auth_storage, booking_data) {
             const guest = guests[i];
             console.log(`Filling details for Guest ${i + 1}: ${guest.full_name || guest.name}`);
 
-            // Name
             await fillReactInput('input[name="name"]', guest.full_name || guest.name || guest.guest_name);
 
-            // Date of birth (YYYY-MM-DD)
             if (guest.dateOfBirth || guest.dob) {
                 await fillReactInput('input[name="dateOfBirth"]', guest.dateOfBirth || guest.dob);
             }
 
-            // Email
             if (guest.email) {
                 await fillReactInput('input[name="email"]', guest.email);
             }
 
-            // Gender
             if (guest.gender) {
                 let gText = 'Male';
                 const lowerG = String(guest.gender).trim().toLowerCase();
@@ -358,42 +367,35 @@ async function processCreateVisitor(auth_storage, booking_data) {
                 await selectMuiDropdown('mui-component-select-gender', gText);
             }
 
-            // Mobile Number
             if (guest.mobile_number || guest.mobile) {
                 await fillReactInput('input[name="mobileNumber"]', guest.mobile_number || guest.mobile);
             }
 
-            // State
             if (guest.state || guest.stateCd) {
                 await selectMuiDropdown('mui-component-select-stateCd', guest.state || guest.stateCd);
-                await page.waitForTimeout(500); // allow district options to load
+                await page.waitForTimeout(500);
             }
 
-            // District
             if (guest.district || guest.districtcd) {
                 await selectMuiDropdown('mui-component-select-districtcd', guest.district || guest.districtcd);
                 await page.waitForTimeout(300);
             }
 
-            // Police Station (Optional)
             if (guest.pscode || guest.police_station) {
                 await selectMuiDropdown('mui-component-select-pscode', guest.pscode || guest.police_station);
             }
 
-            // Document Type
             const docType = guest.document_type || guest.documentType || guest.id_type || '';
             if (docType) {
                 await selectMuiDropdown('mui-component-select-documentType', docType);
-                await page.waitForTimeout(500); // Wait for documentNumber input to enable
+                await page.waitForTimeout(500);
             }
 
-            // Document Number
             const docNumber = guest.document_number || guest.documentNumber || guest.id_number || guest.doc_number;
             if (docNumber) {
                 await fillReactInput('input[name="documentNumber"]', docNumber);
             }
 
-            // Address
             if (guest.address) {
                 await fillReactInput('textarea[name="address"]', guest.address);
             }
@@ -411,7 +413,6 @@ async function processCreateVisitor(auth_storage, booking_data) {
                     const ok = await downloadImage(docUrl, localDocPath);
 
                     if (ok && fs.existsSync(localDocPath)) {
-                        // 25KB Portal requirement check
                         const stats = fs.statSync(localDocPath);
                         if (stats.size < 26000) {
                             const padding = Buffer.alloc(26000 - stats.size, 0);
@@ -426,11 +427,15 @@ async function processCreateVisitor(auth_storage, booking_data) {
                 }
             }
 
-            // Click "Add" button
-            console.log(`Clicking Add button for Guest ${i + 1}...`);
-            const addBtn = page.locator('button.MuiButton-colorSuccess', { hasText: /^Add$/ }).first();
-            await addBtn.waitFor({ state: 'visible', timeout: 5000 });
-            await addBtn.click();
+            // Click "Add" button using Index 4 with Text fallback
+            console.log(`Clicking 'Add' button at Index 4 for Guest ${i + 1}...`);
+            await page.evaluate(() => {
+                const buttons = Array.from(document.querySelectorAll('button'));
+                const addBtn = buttons[4] || buttons.find(b => b.textContent.trim() === 'Add');
+                if (!addBtn) throw new Error('"Add" button DOM me nahi mila.');
+                addBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
+                addBtn.click();
+            });
 
             // Check for Form Errors after clicking Add
             await page.waitForTimeout(1000);
@@ -450,11 +455,15 @@ async function processCreateVisitor(auth_storage, booking_data) {
             }
         }
 
-        // 3. FINAL SUBMIT CHECK-IN
-        console.log('Submitting Final Check-In...');
-        const submitCheckInBtn = page.locator('button:has-text("Submit Check-In")').first();
-        await submitCheckInBtn.waitFor({ state: 'visible', timeout: 10000 });
-        await submitCheckInBtn.click();
+        // 3. FINAL SUBMIT CHECK-IN (Index 6 with Text fallback)
+        console.log('Submitting Final Check-In using Button Index 6...');
+        await page.evaluate(() => {
+            const buttons = Array.from(document.querySelectorAll('button'));
+            const submitBtn = buttons[6] || buttons.find(b => b.textContent.trim().includes('Submit Check-In'));
+            if (!submitBtn) throw new Error('"Submit Check-In" button DOM me nahi mila.');
+            submitBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
+            submitBtn.click();
+        });
 
         // Wait for Toast notification
         let toastMessage = 'Visitor check-in submitted successfully.';
