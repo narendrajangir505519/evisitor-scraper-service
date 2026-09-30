@@ -127,7 +127,7 @@ app.get('/debug-view', async (req, res) => {
         });
         const page = await browser.newPage();
         await page.goto('https://evisitor.rajasthan.gov.in/evisitor', {
-            waitUntil: 'domcontentloaded',
+            waitUntil: 'commit',
             timeout: 60000
         });
         const screenshotBuffer = await page.screenshot({ fullPage: true });
@@ -219,7 +219,7 @@ async function processCreateVisitor(auth_storage, booking_data) {
         }
 
         console.log('Navigating directly to Visitors Management Page...');
-        await page.goto(visitorsUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await page.goto(visitorsUrl, { waitUntil: 'commit', timeout: 60000 });
 
         if (page.url().includes('login') || !page.url().includes('/user/visitors')) {
             throw new Error('Session expire ho gaya hai ya invalid auth data hai.');
