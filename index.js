@@ -639,49 +639,240 @@ async function processCreateVisitor(auth_storage, booking_data) {
             }
 
             // Document File Upload
-            const documentUrls = [
-                guest.document_url,
-                guest.document_url_2
-            ].filter(Boolean);
+            const uploadSingleDocument = async (docUrl, guestIndex, fileIndex) => {
+                if (!docUrl) return;
             
-            const localDocPaths = [];
-            
-            for (let d = 0; d < documentUrls.length; d++) {
-                let docUrl = documentUrls[d];
-            
+                // Relative URL ko full URL me convert karo
                 if (typeof docUrl === 'string' && docUrl.startsWith('/')) {
                     docUrl = `${FIXED_BASE_URL}${docUrl}`;
                 }
             
-                if (typeof docUrl === 'string' && docUrl.startsWith('http')) {
-                    const ext = docUrl.toLowerCase().endsWith('.pdf') ? 'pdf' : 'jpg';
+                if (
+                    typeof docUrl !== 'string' ||
+                    !docUrl.startsWith('http')
+                ) {
+                    throw new Error(
+                        `Guest ${guestIndex + 1}: Invalid document URL`
+                    );
+                }
             
-                    const localDocPath = path.join(
-                        '/tmp',
-                        `doc_g${i + 1}_${d + 1}_${Date.now()}.${ext}`
+                // Extension detect
+                const cleanUrl = docUrl.split('?')[0].toLowerCase();
+            
+                let ext = 'jpg';
+            
+                if (cleanUrl.endsWith('.pdf')) ext = 'pdf';
+                else if (cleanUrl.endsWith('.png')) ext = 'png';
+                else if (cleanUrl.endsWith('.jpeg')) ext = 'jpeg';
+                else if (cleanUrl.endsWith('.jpg')) ext = 'jpg';
+            
+                const localDocPath = path.join(
+                    '/tmp',
+                    `doc_g${guestIndex + 1}_f${fileIndex + 1}_${Date.now()}.${ext}`
+                );
+            
+                console.log(
+                    `Downloading document ${fileIndex + 1} for Guest ${guestIndex + 1}:`,
+                    docUrl
+                );
+            
+                const ok = await downloadImage(docUrl, localDocPath);
+            
+                if (!ok || !fs.existsSync(localDocPath)) {
+                    throw new Error(
+                        `Guest ${guestIndex + 1}: Document ${fileIndex + 1} download failed`
+                    );
+                }
+            
+                // Minimum 25KB portal requirement
+                const stats = fs.statSync(localDocPath);
+            
+                if (stats.size < 26000) {
+                    const padding = Buffer.alloc(
+                        26000 - stats.size,
+                        0
                     );
             
-                    const ok = await downloadImage(docUrl, localDocPath);
+                    fs.appendFileSync(localDocPath, padding);
+                }
             
-                    if (ok && fs.existsSync(localDocPath)) {
-                        const stats = fs.statSync(localDocPath);
+                tempFiles.push(localDocPath);
             
-                        if (stats.size < 26000) {
-                            const padding = Buffer.alloc(26000 - stats.size, 0);
-                            fs.appendFileSync(localDocPath, padding);
+                const fileInput = page.locator(
+                    'input[type="file"][accept*=".jpg"]'
+                ).first();
+            
+                await fileInput.waitFor({
+                    state: 'attached',
+                    timeout: 10000
+                });
+            
+                // Upload se pehle current chip count
+                const chipSelector =
+                    '.MuiChip-root.MuiChip-colorSuccess';
+            
+                const chipCountBefore = await page
+                    .locator(chipSelector)
+                    .count();
+            
+                // Existing toast count
+                const toastCountBefore = await page
+                    .locator('.Toastify__toast')
+                    .count();
+            
+                console.log(
+                    `Uploading document ${fileIndex + 1} for Guest ${guestIndex + 1}...`
+                );
+            
+                // Ek file select karo
+                await fileInput.setInputFiles(localDocPath);
+            
+                // -----------------------------------------------------
+                // WAIT FOR NEW TOAST OR SUCCESS CHIP
+                // -----------------------------------------------------
+            
+                try {
+                    await page.waitForFunction(
+                        ({ toastCountBefore, chipCountBefore }) => {
+                            const toastCount =
+                                document.querySelectorAll(
+                                    '.Toastify__toast'
+                                ).length;
+            
+                            const chipCount =
+                                document.querySelectorAll(
+                                    '.MuiChip-root.MuiChip-colorSuccess'
+                                ).length;
+            
+                            return (
+                                toastCount > toastCountBefore ||
+                                chipCount > chipCountBefore
+                            );
+                        },
+                        {
+                            toastCountBefore,
+                            chipCountBefore
+                        },
+                        {
+                            timeout: 15000
                         }
+                    );
             
-                        tempFiles.push(localDocPath);
-                        localDocPaths.push(localDocPath);
+                } catch (e) {
+                    throw new Error(
+                        `Guest ${guestIndex + 1}: Document ${fileIndex + 1} upload response timeout`
+                    );
+                }
+            
+                // Thoda UI settle hone do
+                await page.waitForTimeout(400);
+            
+                // -----------------------------------------------------
+                // CHECK NEWEST TOAST
+                // -----------------------------------------------------
+            
+                const toastResult = await page.evaluate(() => {
+                    const toasts = Array.from(
+                        document.querySelectorAll(
+                            '.Toastify__toast'
+                        )
+                    );
+            
+                    if (!toasts.length) {
+                        return null;
+                    }
+            
+                    const toast = toasts[toasts.length - 1];
+            
+                    const text =
+                        (toast.innerText || '')
+                            .trim();
+            
+                    const cls =
+                        toast.className || '';
+            
+                    return {
+                        message: text,
+                        success:
+                            cls.includes(
+                                'Toastify__toast--success'
+                            ),
+                        error:
+                            cls.includes(
+                                'Toastify__toast--error'
+                            )
+                    };
+                });
+            
+                if (toastResult) {
+                    console.log(
+                        `Upload toast: ${toastResult.message}`
+                    );
+            
+                    if (toastResult.error) {
+                        throw new Error(
+                            `Guest ${guestIndex + 1}: Document ${fileIndex + 1} upload failed: ${toastResult.message}`
+                        );
                     }
                 }
-            }
             
-            if (localDocPaths.length > 0) {
-                const fileInput = page.locator('input[type="file"]').first();
+                // -----------------------------------------------------
+                // CONFIRM GREEN CHIP ADDED
+                // -----------------------------------------------------
             
-                await fileInput.setInputFiles(localDocPaths);
-                await page.waitForTimeout(1000);
+                try {
+                    await page.waitForFunction(
+                        (previousCount) => {
+                            return (
+                                document.querySelectorAll(
+                                    '.MuiChip-root.MuiChip-colorSuccess'
+                                ).length > previousCount
+                            );
+                        },
+                        chipCountBefore,
+                        {
+                            timeout: 10000
+                        }
+                    );
+            
+                } catch (e) {
+                    throw new Error(
+                        `Guest ${guestIndex + 1}: Document ${fileIndex + 1} upload successful confirm nahi hua.`
+                    );
+                }
+            
+                const chipCountAfter = await page
+                    .locator(chipSelector)
+                    .count();
+            
+                console.log(
+                    `Document ${fileIndex + 1} uploaded successfully. Chips: ${chipCountBefore} -> ${chipCountAfter}`
+                );
+            
+                // Next document upload se pehle small delay
+                await page.waitForTimeout(500);
+            };
+            
+            
+            // ---------------------------------------------------------
+            // FRONT + BACK DOCUMENTS
+            // ---------------------------------------------------------
+            
+            const documentUrls = [
+                guest.document_url,
+                guest.document_url_2
+            ].filter(url => url);
+            
+            for (
+                let d = 0;
+                d < documentUrls.length;
+                d++
+            ) {
+                await uploadSingleDocument(
+                    documentUrls[d],
+                    i,
+                    d
+                );
             }
 
             // Add guest: text-based selector first; numeric index only compatibility fallback.
