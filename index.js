@@ -21,7 +21,7 @@ const axiosInstance = axios.create({
     timeout: 20000
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 
 app.get('/', (req, res) => {
     res.send('E-Visitor Automation Scraper is Active & Fast (Playwright)!');
@@ -1023,6 +1023,6 @@ app.post('/create-visitor', async (req, res) => {
     }
 });
 
-app.listen(PORT, () => {
-    console.log(`Server active on port ${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server is running on port ${PORT}`);
 });
