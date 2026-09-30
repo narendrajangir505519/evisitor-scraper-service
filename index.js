@@ -623,9 +623,15 @@ async function processCreateVisitor(auth_storage, booking_data) {
                 await page.waitForTimeout(500);
             }
 
+            const isVoterIdDocument = (value) => {
+                return String(value || '').trim().toLowerCase() === 'voter id number';
+            };
+
             const docNumber = guest.document_number || guest.documentNumber || guest.id_number || guest.doc_number;
-            if (docNumber) {
-                await fillReactInput('input[name="documentNumber"]', docNumber);
+            if (isVoterIdDocument(docType)) {
+                if (docNumber) {
+                    await fillReactInput('input[name="documentNumber"]', docNumber);
+                }
             }
 
             if (guest.address) {
