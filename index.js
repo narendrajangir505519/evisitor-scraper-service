@@ -74,6 +74,47 @@ async function sendCallback(callbackUrl, payload) {
     }
 }
 
+app.get('/debug-view', async (req, res) => {
+    let browser = null;
+    try {
+        const puppeteer = require('puppeteer-core');
+        const chromium = require('@sparticuz/chromium');
+
+        browser = await puppeteer.launch({
+            args: chromium.args,
+            defaultViewport: chromium.defaultViewport,
+            executablePath: await chromium.executablePath(),
+            headless: chromium.headless
+        });
+
+        const page = await browser.newPage();
+        
+        // Timeout 60s
+        page.setDefaultNavigationTimeout(60000);
+
+        console.log('Opening portal for visual test...');
+        
+        // Portal URL par jayein
+        await page.goto('https://evisitor.rajasthan.gov.in/evisitor', {
+            waitUntil: 'networkidle0',
+            timeout: 60000
+        }).catch(err => console.log('Goto warning:', err.message));
+
+        // Screenshot capture karein
+        const screenshotBuffer = await page.screenshot({ fullPage: true });
+
+        await browser.close();
+
+        // Direct image return karein browser ko
+        res.set('Content-Type', 'image/png');
+        return res.send(screenshotBuffer);
+
+    } catch (error) {
+        if (browser) await browser.close();
+        return res.status(500).send(`Error while capturing view: ${error.message}`);
+    }
+});
+
 function startCreateVisitorBackground(auth_storage, booking_data, callback_url) {
 
     setImmediate(async () => {
