@@ -174,6 +174,34 @@ async function getBrowser() {
     }
 }
 
+app.get('/debug-view', async (req, res) => {
+  let browser = null;
+  try {
+    browser = await playwright.chromium.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-dev-shm-usage']
+    });
+    const page = await browser.newPage();
+    
+    await page.goto('https://evisitor.rajasthan.gov.in/evisitor', {
+      waitUntil: 'domcontentloaded',
+      timeout: 60000
+    });
+
+    const screenshotBuffer = await page.screenshot({ fullPage: true });
+    
+    res.set('Content-Type', 'image/png');
+    return res.send(screenshotBuffer);
+  } catch (err) {
+    return res.status(500).json({
+      status: 'error',
+      message: err.message
+    });
+  } finally {
+    if (browser) await browser.close();
+  }
+});
+
 async function downloadImage(url, destPath) {
     if (!url) return false;
     try {
