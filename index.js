@@ -2,7 +2,6 @@ process.env.TZ = 'Asia/Kolkata';
 
 const express = require('express');
 const { chromium } = require('playwright');
-const chromium = require('@sparticuz/chromium');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
@@ -125,6 +124,7 @@ function startCreateVisitorBackground(auth_storage, booking_data, callback_url) 
     });
 }
 
+// Clean Browser Provider (Official Playwright Docker Image optimized)
 async function getBrowser() {
     if (sharedBrowser && sharedBrowser.isConnected()) {
         return sharedBrowser;
@@ -135,14 +135,9 @@ async function getBrowser() {
     }
 
     browserStarting = (async () => {
-        const executablePath = await sparticuzChromium.executablePath();
-        const filteredArgs = sparticuzChromium.args.filter(
-            arg => !arg.includes('--single-process')
-        );
-
         const browser = await chromium.launch({
+            headless: true,
             args: [
-                ...filteredArgs,
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
@@ -153,9 +148,7 @@ async function getBrowser() {
                 '--disable-extensions',
                 '--disable-sync',
                 '--mute-audio'
-            ],
-            executablePath: executablePath || '/usr/bin/google-chrome',
-            headless: true
+            ]
         });
 
         browser.on('disconnected', () => {
@@ -175,31 +168,31 @@ async function getBrowser() {
 }
 
 app.get('/debug-view', async (req, res) => {
-  let browser = null;
-  try {
-    browser = await playwright.chromium.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-dev-shm-usage']
-    });
-    const page = await browser.newPage();
-    
-    await page.goto('https://evisitor.rajasthan.gov.in/evisitor', {
-      waitUntil: 'domcontentloaded',
-      timeout: 60000
-    });
+    let browser = null;
+    try {
+        browser = await chromium.launch({
+            headless: true,
+            args: ['--no-sandbox', '--disable-dev-shm-usage']
+        });
+        const page = await browser.newPage();
+        
+        await page.goto('https://evisitor.rajasthan.gov.in/evisitor', {
+            waitUntil: 'domcontentloaded',
+            timeout: 60000
+        });
 
-    const screenshotBuffer = await page.screenshot({ fullPage: true });
-    
-    res.set('Content-Type', 'image/png');
-    return res.send(screenshotBuffer);
-  } catch (err) {
-    return res.status(500).json({
-      status: 'error',
-      message: err.message
-    });
-  } finally {
-    if (browser) await browser.close();
-  }
+        const screenshotBuffer = await page.screenshot({ fullPage: true });
+        
+        res.set('Content-Type', 'image/png');
+        return res.send(screenshotBuffer);
+    } catch (err) {
+        return res.status(500).json({
+            status: 'error',
+            message: err.message
+        });
+    } finally {
+        if (browser) await browser.close();
+    }
 });
 
 async function downloadImage(url, destPath) {
@@ -408,7 +401,7 @@ app.post('/login-evisitor', async (req, res) => {
     }
 });
 
-// CREATE VISITOR AUTOMATION ENDPOINT
+// CREATE VISITOR AUTOMATION
 async function processCreateVisitor(auth_storage, booking_data) {
     const visitorsUrl = 'https://evisitor.rajasthan.gov.in/evisitor/user/visitors';
     
@@ -427,7 +420,6 @@ async function processCreateVisitor(auth_storage, booking_data) {
             serviceWorkers: 'block'
         });
 
-        // Un-nesting storage agar Laravel se auth_storage wrap hokar aaya ho
         let storageData = auth_storage;
         if (storageData && storageData.auth_storage) {
             storageData = storageData.auth_storage;
@@ -471,12 +463,10 @@ async function processCreateVisitor(auth_storage, booking_data) {
             throw new Error('Session expire ho gaya hai ya invalid auth data hai.');
         }
 
-        // Update popup check
+        // Modal popup check
         try {
             const updateBtn = page.locator('button:has-text("Update Now"), button:has-text("UPDATE NOW")').first();
-            console.log('Update Now Ka Modal Check Ho Raha Hai');
             if (await updateBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-                console.log('Update Now Ka Modal Open Hai');
                 await updateBtn.click();
                 await page.waitForTimeout(2500);
             }
@@ -485,7 +475,6 @@ async function processCreateVisitor(auth_storage, booking_data) {
         const createBtnClicked = await page.evaluate(() => {
             const buttons = Array.from(document.querySelectorAll('button'));
             const targetBtn = buttons.find(b => (b.textContent || '').trim().toUpperCase() === 'CREATE VISITOR');
-            if (!targetBtn) return { success: false, error: '"CREATE VISITOR" button nahi mila.' };
             if (targetBtn) {
                 targetBtn.click();
                 return true;
@@ -887,7 +876,6 @@ async function processCreateVisitor(auth_storage, booking_data) {
                             await new Promise(r => setTimeout(r, 1000));
                         }
                     } else {
-                        // Non-multiple single input
                         await fileInputs[0].setInputFiles(downloadedDocPaths[0]);
                         await page.evaluate((el) => {
                             el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -900,50 +888,34 @@ async function processCreateVisitor(auth_storage, booking_data) {
             }
 
             console.log(`Clicking 'Add' button for Guest ${i + 1}...`);
-            const addResult = await page.evaluate(async () => {
-                const sleep = ms => new Promise(r => setTimeout(r, ms));
-                const addBtn = page.locator('button.MuiButton-colorSuccess, button.MuiButton-containedSuccess', { 
+            const addBtn = page.locator('button.MuiButton-colorSuccess, button.MuiButton-containedSuccess', { 
                 hasText: /^Add$/ 
             }).first();
-                await addBtn.waitFor({ state: 'visible', timeout: 10000 });
+            await addBtn.waitFor({ state: 'visible', timeout: 10000 });
             await addBtn.scrollIntoViewIfNeeded();
 
-            // Direct DOM Click (Overlay/Backdrop safe)
             await page.evaluate(() => {
                 const buttons = Array.from(document.querySelectorAll('button.MuiButton-colorSuccess, button.MuiButton-containedSuccess'));
                 const btn = buttons.find(b => b.textContent.trim() === 'Add');
                 if (btn) btn.click();
             });
 
-            // Playwright click with force fallback
             await addBtn.click({ force: true, timeout: 3000 }).catch(() => null);
 
+            const addResult = await page.evaluate(async () => {
+                const sleep = ms => new Promise(r => setTimeout(r, ms));
                 for (let x = 0; x < 15; x++) {
                     await sleep(100);
-                
                     const errors = Array.from(
-                        document.querySelectorAll(
-                            '.Mui-error, .MuiFormHelperText-root.Mui-error'
-                        )
-                    )
-                    .map(e => e.innerText.trim())
-                    .filter(Boolean);
+                        document.querySelectorAll('.Mui-error, .MuiFormHelperText-root.Mui-error')
+                    ).map(e => e.innerText.trim()).filter(Boolean);
                 
                     if (errors.length) {
                         return {
                             success: false,
-                            error: 'Input Error: ' +
-                                [...new Set(errors)].join(' | ')
+                            error: 'Input Error: ' + [...new Set(errors)].join(' | ')
                         };
                     }
-                }
-
-                const errors = Array.from(document.querySelectorAll('.Mui-error, .MuiFormHelperText-root.Mui-error'))
-                    .map(e => e.innerText.trim())
-                    .filter(t => t.length > 0);
-
-                if (errors.length > 0) {
-                    return { success: false, error: 'Input Error: ' + [...new Set(errors)].join(' | ') };
                 }
                 return { success: true };
             });
