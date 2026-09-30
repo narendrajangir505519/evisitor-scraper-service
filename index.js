@@ -445,6 +445,9 @@ async function processCreateVisitor(auth_storage, booking_data) {
 
         page = await browser.newPage(); // Assigned page here
 
+        page.setDefaultNavigationTimeout(90000);
+        page.setDefaultTimeout(90000);
+
         await page.setCacheEnabled(true);
         await page.setRequestInterception(true);
 
