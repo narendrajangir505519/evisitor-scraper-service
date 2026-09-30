@@ -1,26 +1,16 @@
-# Node + Pre-installed Chrome aur saari required OS libraries ke sath official image
-FROM ghcr.io/puppeteer/puppeteer:22.6.0
+FROM mcr.microsoft.com/playwright:v1.43.0-jammy
 
-# Cloud Run / Container ke liye environment setup
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable \
-    PORT=8080 \
-    NODE_ENV=production
-
-# Root user se working directory create aur permissions set karein
-USER root
 WORKDIR /app
 
-# Package files copy karein aur install karein
+# Dependencies copy & install
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm install --production
 
-# Baaki code copy karein aur ownership 'pptruser' ko dein (Security best practice)
+# Application code copy
 COPY . .
-RUN chown -R pptruser:pptruser /app
 
-# Non-root user par switch karein (Chrome bina root ke chalne ke liye zaroori hai)
-USER pptruser
+ENV PORT=8080
+ENV NODE_ENV=production
 
 EXPOSE 8080
 
