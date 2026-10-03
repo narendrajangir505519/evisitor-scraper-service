@@ -118,6 +118,194 @@ async function getBrowser() {
     }
 }
 
+// -------------------------------------------------------------
+// EVISITOR AUTH STORAGE HELPERS
+// -------------------------------------------------------------
+
+function normalizeAuthStorage(auth_storage) {
+    let storageData = auth_storage;
+
+    if (storageData && storageData.auth_storage) {
+        storageData = storageData.auth_storage;
+    }
+
+    return storageData || null;
+}
+
+async function createAuthenticatedContext(auth_storage) {
+    const browser = await getBrowser();
+
+    const context = await browser.newContext({
+        viewport: {
+            width: 1366,
+            height: 900
+        },
+        timezoneId: 'Asia/Kolkata',
+        serviceWorkers: 'block'
+    });
+
+    const storageData = normalizeAuthStorage(auth_storage);
+
+    if (storageData) {
+        // Cookies
+        if (Array.isArray(storageData.cookies) && storageData.cookies.length > 0) {
+            await context.addCookies(storageData.cookies);
+        }
+
+        // localStorage + sessionStorage
+        await context.addInitScript((storage) => {
+            try {
+                if (storage.localStorage) {
+                    for (const [key, value] of Object.entries(storage.localStorage)) {
+                        window.localStorage.setItem(key, value);
+                    }
+                }
+
+                if (storage.sessionStorage) {
+                    for (const [key, value] of Object.entries(storage.sessionStorage)) {
+                        window.sessionStorage.setItem(key, value);
+                    }
+                }
+            } catch (e) {
+                // ignore
+            }
+        }, storageData);
+    }
+
+    return {
+        context,
+        storageData
+    };
+}
+
+/*
+|--------------------------------------------------------------------------
+| SESSION CHECK
+|--------------------------------------------------------------------------
+|
+| true  = session active
+| false = expired / login page
+|
+*/
+
+async function isEvisitorSessionValid(page) {
+    await page.waitForSelector('body', { timeout: 15000 });
+    await page.waitForTimeout(800);
+
+    const loginVisible = await page
+        .locator('input[placeholder="Enter SSO ID"]')
+        .isVisible({ timeout: 1500 })
+        .catch(() => false);
+
+    const currentUrl = page.url();
+
+    if (loginVisible || /\/login/i.test(currentUrl)) {
+        return false;
+    }
+
+    /*
+     * Visitors page ka marker.
+     */
+    const visitorsPageVisible = await page
+        .getByText('Visitors List', { exact: false })
+        .first()
+        .isVisible({ timeout: 2500 })
+        .catch(() => false);
+
+    return visitorsPageVisible;
+}
+
+/*
+|--------------------------------------------------------------------------
+| React / MUI Input Fill
+|--------------------------------------------------------------------------
+*/
+
+async function fillReactInput(page, selector, value) {
+    if (value === undefined || value === null) {
+        return;
+    }
+
+    const stringValue = String(value);
+
+    await page.waitForSelector(selector, {
+        state: 'visible',
+        timeout: 10000
+    });
+
+    await page.evaluate(
+        ({ selector, value }) => {
+            const input = document.querySelector(selector);
+
+            if (!input) {
+                throw new Error('Input not found: ' + selector);
+            }
+
+            const prototype =
+                input.tagName === 'TEXTAREA'
+                    ? HTMLTextAreaElement.prototype
+                    : HTMLInputElement.prototype;
+
+            const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+
+            if (setter) {
+                setter.call(input, value);
+            } else {
+                input.value = value;
+            }
+
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            input.dispatchEvent(new Event('blur', { bubbles: true }));
+        },
+        {
+            selector,
+            value: stringValue
+        }
+    );
+}
+
+/*
+|--------------------------------------------------------------------------
+| datetime-local formatter
+|--------------------------------------------------------------------------
+|
+| Input:
+|
+| 2026-10-03 17:50:00
+| 2026-10-03T17:50
+| 2026-10-03T17:50:00
+|
+| Output:
+|
+| 2026-10-03T17:50
+|
+*/
+
+function formatDateTimeLocal(value) {
+    if (!value) {
+        return '';
+    }
+
+    let output = String(value).trim();
+
+    /*
+     * Space -> T
+     */
+    output = output.replace(' ', 'T');
+
+    /*
+     * timezone/remove seconds if present
+     */
+    const match = output.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
+
+    if (!match) {
+        return '';
+    }
+
+    return match[1] + 'T' + match[2];
+}
+
 app.get('/debug-view', async (req, res) => {
     let browser = null;
     try {
@@ -1093,6 +1281,898 @@ app.post('/create-visitor', async (req, res) => {
         return res.status(500).json({
             status: 'failed',
             message: error.message || 'Visitor automation failed.'
+        });
+    }
+});
+
+// -------------------------------------------------------------
+// CHECKOUT VISITOR AUTOMATION
+// -------------------------------------------------------------
+
+function normalizeAuthStorage(auth_storage) {
+    let storageData = auth_storage;
+
+    if (storageData && storageData.auth_storage) {
+        storageData = storageData.auth_storage;
+    }
+
+    return storageData || null;
+}
+
+async function createAuthenticatedContext(auth_storage) {
+    const browser = await getBrowser();
+
+    const context = await browser.newContext({
+        viewport: {
+            width: 1366,
+            height: 900
+        },
+        timezoneId: 'Asia/Kolkata',
+        serviceWorkers: 'block'
+    });
+
+    const storageData = normalizeAuthStorage(auth_storage);
+
+    if (storageData) {
+        // Cookies
+        if (Array.isArray(storageData.cookies) && storageData.cookies.length > 0) {
+            await context.addCookies(storageData.cookies);
+        }
+
+        // localStorage + sessionStorage
+        await context.addInitScript((storage) => {
+            try {
+                if (storage.localStorage) {
+                    for (const [key, value] of Object.entries(storage.localStorage)) {
+                        window.localStorage.setItem(key, value);
+                    }
+                }
+
+                if (storage.sessionStorage) {
+                    for (const [key, value] of Object.entries(storage.sessionStorage)) {
+                        window.sessionStorage.setItem(key, value);
+                    }
+                }
+            } catch (e) {
+                // ignore
+            }
+        }, storageData);
+    }
+
+    return {
+        context,
+        storageData
+    };
+}
+
+/*
+|--------------------------------------------------------------------------
+| SESSION CHECK
+|--------------------------------------------------------------------------
+|
+| true  = session active
+| false = expired / login page
+|
+*/
+
+async function isEvisitorSessionValid(page) {
+    await page.waitForSelector('body', { timeout: 15000 });
+    await page.waitForTimeout(800);
+
+    const loginVisible = await page
+        .locator('input[placeholder="Enter SSO ID"]')
+        .isVisible({ timeout: 1500 })
+        .catch(() => false);
+
+    const currentUrl = page.url();
+
+    if (loginVisible || /\/login/i.test(currentUrl)) {
+        return false;
+    }
+
+    /*
+     * Visitors page ka marker.
+     */
+    const visitorsPageVisible = await page
+        .getByText('Visitors List', { exact: false })
+        .first()
+        .isVisible({ timeout: 2500 })
+        .catch(() => false);
+
+    return visitorsPageVisible;
+}
+
+/*
+|--------------------------------------------------------------------------
+| React / MUI Input Fill
+|--------------------------------------------------------------------------
+*/
+
+async function fillReactInput(page, selector, value) {
+    if (value === undefined || value === null) {
+        return;
+    }
+
+    const stringValue = String(value);
+
+    await page.waitForSelector(selector, {
+        state: 'visible',
+        timeout: 10000
+    });
+
+    await page.evaluate(
+        ({ selector, value }) => {
+            const input = document.querySelector(selector);
+
+            if (!input) {
+                throw new Error('Input not found: ' + selector);
+            }
+
+            const prototype =
+                input.tagName === 'TEXTAREA'
+                    ? HTMLTextAreaElement.prototype
+                    : HTMLInputElement.prototype;
+
+            const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+
+            if (setter) {
+                setter.call(input, value);
+            } else {
+                input.value = value;
+            }
+
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            input.dispatchEvent(new Event('blur', { bubbles: true }));
+        },
+        {
+            selector,
+            value: stringValue
+        }
+    );
+}
+
+/*
+|--------------------------------------------------------------------------
+| datetime-local formatter
+|--------------------------------------------------------------------------
+|
+| Input:
+|
+| 2026-10-03 17:50:00
+| 2026-10-03T17:50
+| 2026-10-03T17:50:00
+|
+| Output:
+|
+| 2026-10-03T17:50
+|
+*/
+
+function formatDateTimeLocal(value) {
+    if (!value) {
+        return '';
+    }
+
+    let output = String(value).trim();
+
+    /*
+     * Space -> T
+     */
+    output = output.replace(' ', 'T');
+
+    /*
+     * timezone/remove seconds if present
+     */
+    const match = output.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
+
+    if (!match) {
+        return '';
+    }
+
+    return match[1] + 'T' + match[2];
+}
+
+async function processCheckoutVisitor(auth_storage, checkout_data) {
+    const visitorsUrl = 'https://evisitor.rajasthan.gov.in/evisitor/user/visitors';
+
+    let context = null;
+    let page = null;
+
+    try {
+        /*
+        |--------------------------------------------------------------------------
+        | Validation
+        |--------------------------------------------------------------------------
+        */
+
+        const visitorName = String(
+            checkout_data.visitorName || checkout_data.visitor_name || ''
+        ).trim();
+
+        const visitorMob = String(
+            checkout_data.visitorMob || checkout_data.visitor_mobile || ''
+        ).trim();
+
+        const checkoutDateTime = formatDateTimeLocal(
+            checkout_data.checkout_datetime ||
+            checkout_data.checkOutDateTime ||
+            checkout_data.checkoutDateTime
+        );
+
+        if (!visitorName) {
+            return {
+                status: 'failed',
+                message: 'visitorName required hai.'
+            };
+        }
+
+        if (!visitorMob) {
+            return {
+                status: 'failed',
+                message: 'visitorMob required hai.'
+            };
+        }
+
+        if (!checkoutDateTime) {
+            return {
+                status: 'failed',
+                message: 'Valid checkout_datetime required hai.'
+            };
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Browser Context + Auth Restore
+        |--------------------------------------------------------------------------
+        */
+
+        const authResult = await createAuthenticatedContext(auth_storage);
+        context = authResult.context;
+        page = await context.newPage();
+
+        console.log('CHECKOUT: Navigating to Visitors page...');
+
+        await page.goto(visitorsUrl, {
+            waitUntil: 'domcontentloaded',
+            timeout: 45000
+        });
+
+        /*
+        |--------------------------------------------------------------------------
+        | Session Expired Check
+        |--------------------------------------------------------------------------
+        */
+
+        const sessionValid = await isEvisitorSessionValid(page);
+
+        if (!sessionValid) {
+            await context.close();
+            context = null;
+
+            return {
+                status: 'failed',
+                error_code: 'EVISITOR_SESSION_EXPIRED',
+                message: 'Evisitor session expired. Please reconnect Evisitor.'
+            };
+        }
+
+        console.log('CHECKOUT: Session valid.');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Fill Visitor Name
+        |--------------------------------------------------------------------------
+        |
+        | Actual portal HTML:
+        |
+        | input[name="visitorName"]
+        |
+        */
+
+        await fillReactInput(page, 'input[name="visitorName"]', visitorName);
+
+        /*
+        |--------------------------------------------------------------------------
+        | Fill Visitor Mobile
+        |--------------------------------------------------------------------------
+        |
+        | Actual:
+        |
+        | input[name="visitorMob"]
+        |
+        */
+
+        await fillReactInput(page, 'input[name="visitorMob"]', visitorMob);
+
+        console.log('CHECKOUT: Filters filled:', {
+            visitorName,
+            visitorMob
+        });
+
+        /*
+        |--------------------------------------------------------------------------
+        | APPLY BUTTON
+        |--------------------------------------------------------------------------
+        |
+        | User requirement:
+        | Apply button index 0
+        |
+        | First index try karenge,
+        | text selector fallback hoga.
+        |
+        */
+
+        let applyClicked = false;
+
+        /*
+         * INDEX 0
+         */
+        const applyByIndex = await page.evaluate(() => {
+            const buttons = Array.from(document.querySelectorAll('button'));
+            const button = buttons[0];
+
+            if (!button) {
+                return false;
+            }
+
+            const text = (button.textContent || '').trim();
+
+            /*
+             * Safety:
+             * button 0 Apply hi hona chahiye.
+             */
+            if (!/apply/i.test(text)) {
+                return false;
+            }
+
+            const rect = button.getBoundingClientRect();
+
+            if (rect.width <= 0 || rect.height <= 0 || button.disabled) {
+                return false;
+            }
+
+            button.scrollIntoView({
+                block: 'center',
+                behavior: 'instant'
+            });
+
+            button.click();
+            return true;
+        });
+
+        if (applyByIndex) {
+            applyClicked = true;
+            console.log('CHECKOUT: Apply button index 0 clicked.');
+        }
+
+        /*
+         * Fallback text selector.
+         */
+        if (!applyClicked) {
+            const applyButton = page
+                .getByRole('button', {
+                    name: 'Apply',
+                    exact: true
+                })
+                .first();
+
+            if (await applyButton.isVisible({ timeout: 3000 }).catch(() => false)) {
+                await applyButton.click();
+                applyClicked = true;
+                console.log('CHECKOUT: Apply text selector clicked.');
+            }
+        }
+
+        if (!applyClicked) {
+            throw new Error('Apply button nahi mila.');
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Wait Filter Result
+        |--------------------------------------------------------------------------
+        */
+
+        await page.waitForTimeout(1500);
+
+        await page.waitForSelector('table tbody', {
+            timeout: 10000
+        });
+
+        /*
+        |--------------------------------------------------------------------------
+        | Check Result List Empty?
+        |--------------------------------------------------------------------------
+        */
+
+        const tableResult = await page.evaluate(
+            ({ expectedName, expectedMobile }) => {
+                const normalize = (value) =>
+                    String(value || '')
+                        .replace(/\s+/g, ' ')
+                        .trim()
+                        .toLowerCase();
+
+                const tbody = document.querySelector('table tbody');
+
+                if (!tbody) {
+                    return {
+                        hasRows: false,
+                        rowCount: 0,
+                        matchedIndex: -1
+                    };
+                }
+
+                const rows = Array.from(tbody.querySelectorAll('tr'));
+
+                if (rows.length === 0) {
+                    return {
+                        hasRows: false,
+                        rowCount: 0,
+                        matchedIndex: -1
+                    };
+                }
+
+                /*
+                 * Filter already name/mobile laga chuka hai,
+                 * phir bhi name verify karna safer hai.
+                 *
+                 * Mobile portal masked ho sakta hai:
+                 * 93******19
+                 * isliye exact mobile comparison nahi.
+                 */
+
+                const nameNeed = normalize(expectedName);
+
+                let matchedIndex = rows.findIndex((row) => {
+                    const cells = Array.from(row.querySelectorAll('td'));
+
+                    if (cells.length < 2) {
+                        return false;
+                    }
+
+                    const rowName = normalize(cells[1]?.innerText);
+
+                    return (
+                        rowName === nameNeed ||
+                        rowName.includes(nameNeed) ||
+                        nameNeed.includes(rowName)
+                    );
+                });
+
+                /*
+                 * Name exact match na ho,
+                 * filter result ka first row use karo.
+                 */
+                if (matchedIndex < 0 && rows.length > 0) {
+                    matchedIndex = 0;
+                }
+
+                return {
+                    hasRows: rows.length > 0,
+                    rowCount: rows.length,
+                    matchedIndex
+                };
+            },
+            {
+                expectedName: visitorName,
+                expectedMobile: visitorMob
+            }
+        );
+
+        console.log('CHECKOUT: Search result:', tableResult);
+
+        if (!tableResult.hasRows || tableResult.matchedIndex < 0) {
+            await context.close();
+            context = null;
+
+            return {
+                status: 'failed',
+                error_code: 'VISITOR_NOT_FOUND',
+                message: 'Visitor search result empty hai.'
+            };
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Click Check-Out button of matched row
+        |--------------------------------------------------------------------------
+        */
+
+        const checkoutClicked = await page.evaluate((rowIndex) => {
+            const rows = Array.from(document.querySelectorAll('table tbody tr'));
+            const row = rows[rowIndex];
+
+            if (!row) {
+                return false;
+            }
+
+            const buttons = Array.from(row.querySelectorAll('button'));
+            const checkoutButton = buttons.find((button) =>
+                /check[\s-]*out/i.test((button.textContent || '').trim())
+            );
+
+            if (!checkoutButton || checkoutButton.disabled) {
+                return false;
+            }
+
+            checkoutButton.scrollIntoView({
+                block: 'center',
+                behavior: 'instant'
+            });
+
+            checkoutButton.click();
+            return true;
+        }, tableResult.matchedIndex);
+
+        if (!checkoutClicked) {
+            throw new Error('Check-Out button result row me nahi mila.');
+        }
+
+        console.log('CHECKOUT: Check-Out clicked. Waiting modal...');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Wait Modal
+        |--------------------------------------------------------------------------
+        */
+
+        const dialog = page.locator('div[role="dialog"]').last();
+
+        await dialog.waitFor({
+            state: 'visible',
+            timeout: 10000
+        });
+
+        /*
+        |--------------------------------------------------------------------------
+        | Find Checkout datetime-local input
+        |--------------------------------------------------------------------------
+        |
+        | First priority:
+        |
+        | #_r_40_
+        |
+        | But MUI generated ID dynamic ho sakti hai.
+        |
+        | Fallback:
+        | dialog ke andar enabled datetime-local input
+        |
+        */
+
+        let checkoutInput = dialog.locator('#_r_40_');
+        let checkoutInputExists = await checkoutInput.count();
+
+        if (checkoutInputExists === 0) {
+            checkoutInput = dialog
+                .locator('input[type="datetime-local"]:not([disabled])')
+                .first();
+        }
+
+        await checkoutInput.waitFor({
+            state: 'visible',
+            timeout: 10000
+        });
+
+        /*
+        |--------------------------------------------------------------------------
+        | Portal min/max validation
+        |--------------------------------------------------------------------------
+        */
+
+        const dateLimits = await checkoutInput.evaluate((input) => ({
+            min: input.min || '',
+            max: input.max || ''
+        }));
+
+        console.log('CHECKOUT datetime:', {
+            requested: checkoutDateTime,
+            min: dateLimits.min,
+            max: dateLimits.max
+        });
+
+        /*
+         * Browser side min/max ke bahar hai
+         * to submit fail hoga.
+         */
+        if (dateLimits.min && checkoutDateTime < dateLimits.min) {
+            throw new Error(
+                `Checkout datetime ${checkoutDateTime} check-in datetime ${dateLimits.min} se pehle hai.`
+            );
+        }
+
+        if (dateLimits.max && checkoutDateTime > dateLimits.max) {
+            throw new Error(
+                `Checkout datetime ${checkoutDateTime} portal max ${dateLimits.max} se aage hai.`
+            );
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Fill datetime-local React Input
+        |--------------------------------------------------------------------------
+        */
+
+        await checkoutInput.evaluate((input, value) => {
+            const setter = Object.getOwnPropertyDescriptor(
+                HTMLInputElement.prototype,
+                'value'
+            )?.set;
+
+            if (setter) {
+                setter.call(input, value);
+            } else {
+                input.value = value;
+            }
+
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            input.dispatchEvent(new Event('blur', { bubbles: true }));
+        }, checkoutDateTime);
+
+        /*
+         * Verify actual DOM value.
+         */
+        const filledValue = await checkoutInput.inputValue();
+
+        console.log('CHECKOUT: filled datetime-local:', filledValue);
+
+        if (filledValue !== checkoutDateTime) {
+            throw new Error('Checkout datetime input fill verify nahi hua.');
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Submit Checkout
+        |--------------------------------------------------------------------------
+        */
+
+        const submitButton = dialog
+            .getByRole('button', {
+                name: 'Submit',
+                exact: true
+            })
+            .first();
+
+        await submitButton.waitFor({
+            state: 'visible',
+            timeout: 7000
+        });
+
+        if (await submitButton.isDisabled().catch(() => false)) {
+            throw new Error('Checkout Submit button disabled hai.');
+        }
+
+        /*
+         * Existing toast count.
+         */
+        const toastCountBefore = await page.locator('.Toastify__toast').count();
+
+        await submitButton.click();
+
+        console.log('CHECKOUT: Submit clicked.');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Wait response/toast/modal close
+        |--------------------------------------------------------------------------
+        */
+
+        await Promise.race([
+            page.waitForFunction(
+                (previousCount) => {
+                    return (
+                        document.querySelectorAll('.Toastify__toast').length >
+                        previousCount
+                    );
+                },
+                toastCountBefore,
+                { timeout: 12000 }
+            ),
+            dialog.waitFor({
+                state: 'hidden',
+                timeout: 12000
+            })
+        ]).catch(() => null);
+
+        await page.waitForTimeout(500);
+
+        /*
+        |--------------------------------------------------------------------------
+        | Read newest toast
+        |--------------------------------------------------------------------------
+        */
+
+        const checkoutResult = await page.evaluate(() => {
+            const toasts = Array.from(document.querySelectorAll('.Toastify__toast'));
+
+            if (toasts.length === 0) {
+                return {
+                    message: '',
+                    success: false,
+                    error: false
+                };
+            }
+
+            const toast = toasts[toasts.length - 1];
+            const message = (toast.innerText || '').trim();
+            const cls = toast.className || '';
+
+            return {
+                message,
+                success:
+                    cls.includes('Toastify__toast--success') ||
+                    /success|successful|checked.?out|check.?out/i.test(message),
+                error:
+                    cls.includes('Toastify__toast--error') ||
+                    /error|failed|invalid|required/i.test(message)
+            };
+        });
+
+        console.log('CHECKOUT result:', checkoutResult);
+
+        if (checkoutResult.error) {
+            throw new Error(checkoutResult.message || 'Evisitor checkout failed.');
+        }
+
+        /*
+         * Modal still visible + no success = failure.
+         */
+        const modalStillVisible = await dialog.isVisible().catch(() => false);
+
+        if (!checkoutResult.success && modalStillVisible) {
+            /*
+             * MUI errors check.
+             */
+            const errors = await dialog
+                .locator('.Mui-error, .MuiFormHelperText-root.Mui-error')
+                .allInnerTexts()
+                .catch(() => []);
+
+            const cleanErrors = errors
+                .map((value) => value.trim())
+                .filter(Boolean);
+
+            if (cleanErrors.length > 0) {
+                throw new Error(
+                    'Checkout validation failed: ' +
+                    [...new Set(cleanErrors)].join(' | ')
+                );
+            }
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | SUCCESS
+        |--------------------------------------------------------------------------
+        */
+
+        await context.close();
+        context = null;
+
+        return {
+            status: 'success',
+            message: checkoutResult.message || 'Visitor checked-out successfully.',
+            visitor_name: visitorName,
+            visitor_mobile: visitorMob,
+            checkout_datetime: checkoutDateTime
+        };
+    } catch (error) {
+        console.error('CHECKOUT ERROR:', error);
+
+        let errorScreenshotBase64 = null;
+
+        if (page && !page.isClosed()) {
+            try {
+                const screenshot = await page.screenshot({ fullPage: true });
+                errorScreenshotBase64 = screenshot.toString('base64');
+            } catch (e) {
+                console.error('Checkout screenshot failed:', e.message);
+            }
+        }
+
+        if (context) {
+            try {
+                await context.close();
+            } catch (e) {}
+            context = null;
+        }
+
+        return {
+            status: 'failed',
+            message: error.message || 'Visitor checkout failed.',
+            error_screenshot: errorScreenshotBase64
+                ? 'data:image/png;base64,' + errorScreenshotBase64
+                : null
+        };
+    }
+}
+
+// -------------------------------------------------------------
+// POST /checkout-visitor
+// -------------------------------------------------------------
+
+app.post('/checkout-visitor', async (req, res) => {
+    try {
+        const { auth_storage, checkout_data } = req.body;
+
+        if (!auth_storage) {
+            return res.status(400).json({
+                status: 'failed',
+                message: 'auth_storage required hai.'
+            });
+        }
+
+        if (!checkout_data) {
+            return res.status(400).json({
+                status: 'failed',
+                message: 'checkout_data required hai.'
+            });
+        }
+
+        if (!checkout_data.visitorName && !checkout_data.visitor_name) {
+            return res.status(400).json({
+                status: 'failed',
+                message: 'visitorName required hai.'
+            });
+        }
+
+        if (!checkout_data.visitorMob && !checkout_data.visitor_mobile) {
+            return res.status(400).json({
+                status: 'failed',
+                message: 'visitorMob required hai.'
+            });
+        }
+
+        if (
+            !checkout_data.checkout_datetime &&
+            !checkout_data.checkOutDateTime &&
+            !checkout_data.checkoutDateTime
+        ) {
+            return res.status(400).json({
+                status: 'failed',
+                message: 'checkout_datetime required hai.'
+            });
+        }
+
+        console.log('Checkout request received:', {
+            visitorName: checkout_data.visitorName || checkout_data.visitor_name,
+            visitorMob: checkout_data.visitorMob || checkout_data.visitor_mobile,
+            checkout_datetime:
+                checkout_data.checkout_datetime ||
+                checkout_data.checkOutDateTime ||
+                checkout_data.checkoutDateTime
+        });
+
+        /*
+         * Synchronous checkout.
+         */
+        const result = await processCheckoutVisitor(auth_storage, checkout_data);
+
+        /*
+         * IMPORTANT:
+         *
+         * Session expired bhi status=failed
+         * response me jayega.
+         *
+         * Laravel uske according
+         * auto reconnect kar sakta hai.
+         */
+
+        const httpStatus = result.status === 'success' ? 200 : 422;
+
+        return res.status(httpStatus).json({
+            ...result,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('Checkout endpoint error:', error);
+
+        return res.status(500).json({
+            status: 'failed',
+            message: error.message || 'Checkout automation failed.',
+            timestamp: new Date().toISOString()
         });
     }
 });
