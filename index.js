@@ -1924,42 +1924,129 @@ async function processCheckoutVisitor(auth_storage, checkout_data) {
 
         /*
         |--------------------------------------------------------------------------
-        | Submit Checkout
+        | Submit first checkout modal
         |--------------------------------------------------------------------------
         */
-
-        const submitButton = dialog
+        
+        const firstDialog = page
+            .locator('div[role="dialog"]')
+            .filter({
+                hasText: 'Please select check-out date and time'
+            })
+            .first();
+        
+        const submitButton = firstDialog
             .getByRole('button', {
                 name: 'Submit',
                 exact: true
             })
             .first();
-
+        
         await submitButton.waitFor({
             state: 'visible',
             timeout: 7000
         });
-
+        
         if (await submitButton.isDisabled().catch(() => false)) {
             throw new Error('Checkout Submit button disabled hai.');
         }
-
+        
         /*
-         * Existing toast count.
+         * Click first Submit.
+         *
+         * IMPORTANT:
+         * Isse checkout complete nahi hota.
+         * Confirmation modal open hota hai.
          */
-        const toastCountBefore = await page.locator('.Toastify__toast').count();
-
         await submitButton.click();
-
-        console.log('CHECKOUT: Submit clicked.');
-
+        
+        console.log('CHECKOUT: First Submit clicked. Waiting confirmation modal...');
+        
         /*
         |--------------------------------------------------------------------------
-        | Wait response/toast/modal close
+        | WAIT CONFIRMATION MODAL
+        |--------------------------------------------------------------------------
+        |
+        | Portal HTML:
+        |
+        | Are you sure you want to check-out?
+        |
+        | Yes, Confirm
+        | Cancel
+        |
+        */
+        
+        const confirmDialog = page
+            .locator('div[role="dialog"]')
+            .filter({
+                hasText: 'Are you sure you want to check-out?'
+            })
+            .last();
+        
+        await confirmDialog.waitFor({
+            state: 'visible',
+            timeout: 10000
+        });
+        
+        console.log('CHECKOUT: Confirmation modal opened.');
+        
+        /*
+        |--------------------------------------------------------------------------
+        | Find "Yes, Confirm"
         |--------------------------------------------------------------------------
         */
-
+        
+        const confirmButton = confirmDialog
+            .getByRole('button', {
+                name: 'Yes, Confirm',
+                exact: true
+            })
+            .first();
+        
+        await confirmButton.waitFor({
+            state: 'visible',
+            timeout: 7000
+        });
+        
+        if (await confirmButton.isDisabled().catch(() => false)) {
+            throw new Error('Yes, Confirm button disabled hai.');
+        }
+        
+        /*
+        |--------------------------------------------------------------------------
+        | Existing Toast Count
+        |--------------------------------------------------------------------------
+        */
+        
+        const toastCountBefore = await page.locator('.Toastify__toast').count();
+        
+        /*
+        |--------------------------------------------------------------------------
+        | FINAL CONFIRM CLICK
+        |--------------------------------------------------------------------------
+        */
+        
+        await confirmButton.click();
+        
+        console.log('CHECKOUT: Yes, Confirm clicked.');
+        
+        /*
+        |--------------------------------------------------------------------------
+        | Wait for actual checkout result
+        |--------------------------------------------------------------------------
+        |
+        | Success me:
+        |
+        | - confirm modal close hoga
+        | - checkout modal bhi close ho sakta hai
+        | - toast aa sakta hai
+        |
+        */
+        
         await Promise.race([
+            /*
+             * New toast
+             */
             page.waitForFunction(
                 (previousCount) => {
                     return (
@@ -1968,25 +2055,31 @@ async function processCheckoutVisitor(auth_storage, checkout_data) {
                     );
                 },
                 toastCountBefore,
-                { timeout: 12000 }
+                {
+                    timeout: 15000
+                }
             ),
-            dialog.waitFor({
+        
+            /*
+             * Confirmation modal hidden
+             */
+            confirmDialog.waitFor({
                 state: 'hidden',
-                timeout: 12000
+                timeout: 15000
             })
         ]).catch(() => null);
-
-        await page.waitForTimeout(500);
-
+        
+        await page.waitForTimeout(800);
+        
         /*
         |--------------------------------------------------------------------------
-        | Read newest toast
+        | Read Latest Toast
         |--------------------------------------------------------------------------
         */
-
+        
         const checkoutResult = await page.evaluate(() => {
             const toasts = Array.from(document.querySelectorAll('.Toastify__toast'));
-
+        
             if (toasts.length === 0) {
                 return {
                     message: '',
@@ -1994,63 +2087,85 @@ async function processCheckoutVisitor(auth_storage, checkout_data) {
                     error: false
                 };
             }
-
+        
             const toast = toasts[toasts.length - 1];
             const message = (toast.innerText || '').trim();
             const cls = toast.className || '';
-
+            const lowerMessage = message.toLowerCase();
+        
             return {
                 message,
                 success:
                     cls.includes('Toastify__toast--success') ||
-                    /success|successful|checked.?out|check.?out/i.test(message),
+                    lowerMessage.includes('success') ||
+                    lowerMessage.includes('checked-out') ||
+                    lowerMessage.includes('checkout'),
                 error:
                     cls.includes('Toastify__toast--error') ||
-                    /error|failed|invalid|required/i.test(message)
+                    lowerMessage.includes('error') ||
+                    lowerMessage.includes('failed') ||
+                    lowerMessage.includes('invalid')
             };
         });
-
-        console.log('CHECKOUT result:', checkoutResult);
-
+        
+        console.log('CHECKOUT final response:', checkoutResult);
+        
+        /*
+        |--------------------------------------------------------------------------
+        | Explicit Error Toast
+        |--------------------------------------------------------------------------
+        */
+        
         if (checkoutResult.error) {
             throw new Error(checkoutResult.message || 'Evisitor checkout failed.');
         }
-
+        
         /*
-         * Modal still visible + no success = failure.
-         */
-        const modalStillVisible = await dialog.isVisible().catch(() => false);
-
-        if (!checkoutResult.success && modalStillVisible) {
-            /*
-             * MUI errors check.
-             */
-            const errors = await dialog
-                .locator('.Mui-error, .MuiFormHelperText-root.Mui-error')
-                .allInnerTexts()
-                .catch(() => []);
-
-            const cleanErrors = errors
-                .map((value) => value.trim())
-                .filter(Boolean);
-
-            if (cleanErrors.length > 0) {
-                throw new Error(
-                    'Checkout validation failed: ' +
-                    [...new Set(cleanErrors)].join(' | ')
-                );
-            }
+        |--------------------------------------------------------------------------
+        | Check Confirmation Modal Closed
+        |--------------------------------------------------------------------------
+        */
+        
+        const confirmModalStillVisible = await confirmDialog
+            .isVisible()
+            .catch(() => false);
+        
+        if (confirmModalStillVisible) {
+            throw new Error(
+                'Checkout confirmation modal close nahi hua. Checkout confirm nahi hua.'
+            );
         }
-
+        
+        /*
+        |--------------------------------------------------------------------------
+        | Additional verification
+        |--------------------------------------------------------------------------
+        |
+        | Pehla datetime modal bhi ideally close ho jana chahiye.
+        |
+        */
+        
+        const firstModalStillVisible = await firstDialog
+            .isVisible()
+            .catch(() => false);
+        
+        if (firstModalStillVisible) {
+            console.warn(
+                'Checkout date modal abhi visible hai. Portal UI settle hone ka wait kar rahe hain.'
+            );
+        
+            await page.waitForTimeout(1000);
+        }
+        
         /*
         |--------------------------------------------------------------------------
         | SUCCESS
         |--------------------------------------------------------------------------
         */
-
+        
         await context.close();
         context = null;
-
+        
         return {
             status: 'success',
             message: checkoutResult.message || 'Visitor checked-out successfully.',
