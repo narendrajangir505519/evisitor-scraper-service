@@ -26,60 +26,9 @@ app.get('/', (req, res) => {
     res.send('E-Visitor Automation Scraper is Active & Fast (Playwright)!');
 });
 
-async function sendCallback(callbackUrl, payload) {
-    if (!callbackUrl) {
-        console.log('callback_url nahi diya gaya.');
-        return false;
-    }
-
-    try {
-        console.log('Callback sending:', callbackUrl);
-        const response = await axiosInstance.post(callbackUrl, payload, {
-            timeout: 15000,
-            headers: { 'Content-Type': 'application/json' },
-            maxContentLength: Infinity,
-            maxBodyLength: Infinity
-        });
-        console.log('Callback success:', response.status);
-        return true;
-    } catch (error) {
-        console.error('Callback failed:', error.message);
-        return false;
-    }
-}
-
-function startCreateVisitorBackground(auth_storage, booking_data, callback_url) {
-    setImmediate(async () => {
-        try {
-            console.log('BACKGROUND CREATE VISITOR STARTED');
-            const result = await processCreateVisitor(auth_storage, booking_data);
-            console.log('Background process completed:', result.status);
-
-            if (callback_url) {
-                await sendCallback(callback_url, {
-                    status: result.status,
-                    message: result.message || '',
-                    updated_person_ids: result.updated_person_ids || [],
-                    screenshot: result.screenshot || null,
-                    error_screenshot: result.error_screenshot || null,
-                    timestamp: new Date().toISOString()
-                });
-            }
-        } catch (error) {
-            console.error('Background process fatal error:', error);
-            if (callback_url) {
-                await sendCallback(callback_url, {
-                    status: 'failed',
-                    message: error.message || 'Background automation failed',
-                    updated_person_ids: [],
-                    screenshot: null,
-                    error_screenshot: null,
-                    timestamp: new Date().toISOString()
-                });
-            }
-        }
-    });
-}
+// -------------------------------------------------------------
+// SHARED BROWSER
+// -------------------------------------------------------------
 
 async function getBrowser() {
     if (sharedBrowser && sharedBrowser.isConnected()) {
@@ -1059,61 +1008,175 @@ async function processCreateVisitor(auth_storage, booking_data) {
                 throw new Error(`Guest ${i + 1} validation failed: ${uniqueErrors}`);
             }
 
-            if (guest.person_pk !== undefined && guest.person_pk !== null) {
-                updatedPersonIds.push(guest.person_pk);
-            }
         }
 
+        // -------------------------------------------------------------
         // 3. FINAL SUBMIT CHECK-IN
+        // -------------------------------------------------------------
         console.log('Submitting Final Check-In...');
+
+        // Final submit se pehle jo bhi purane upload toasts DOM me hain,
+        // unko mark kar do. Final success me unko use nahi karna hai.
+        const oldToastCount = await page.evaluate(() => {
+            const toasts = Array.from(
+                document.querySelectorAll('.Toastify__toast')
+            );
+
+            toasts.forEach((toast) => {
+                toast.setAttribute('data-before-final-submit', 'true');
+            });
+
+            return toasts.length;
+        });
+
+        console.log(
+            `FINAL SUBMIT: Existing toast count = ${oldToastCount}`
+        );
+
         await clickBodyButtonByText(
             page,
             'Submit Check-In',
             'Submit Check-In'
         );
 
-        let toastMessage = '';
-        let toastIsError = false;
+        console.log(
+            'FINAL SUBMIT: Submit Check-In clicked. New response toast ka wait kar rahe hain...'
+        );
+
+        // Sirf Submit Check-In ke BAAD aaya hua naya toast valid hoga.
         try {
-            await page.waitForSelector('.Toastify__toast', { timeout: 8000 });
-            const toast = await page.evaluate(() => {
-                const el = document.querySelector('.Toastify__toast');
-                if (!el) return { message: '', isError: false, isSuccess: false };
-                const message = (el.innerText || '').trim();
-                const cls = el.className || '';
-                return {
-                    message,
-                    isError: cls.includes('Toastify__toast--error') || /error|failed|invalid|required/i.test(message),
-                    isSuccess: cls.includes('Toastify__toast--success') || /success|successful|submitted|created/i.test(message)
-                };
+            await page.waitForFunction(
+                () => {
+                    const toasts = Array.from(
+                        document.querySelectorAll('.Toastify__toast')
+                    );
+
+                    return toasts.some((toast) => {
+                        return !toast.hasAttribute(
+                            'data-before-final-submit'
+                        );
+                    });
+                },
+                null,
+                {
+                    timeout: 10000
+                }
+            );
+        } catch (error) {
+            throw new Error(
+                'Final Submit Check-In ke baad naya response toast nahi mila.'
+            );
+        }
+
+        const finalToast = await page.evaluate(() => {
+            const newToasts = Array.from(
+                document.querySelectorAll('.Toastify__toast')
+            ).filter((toast) => {
+                return !toast.hasAttribute(
+                    'data-before-final-submit'
+                );
             });
-            toastMessage = toast.message;
-            toastIsError = toast.isError;
-        } catch (e) {
-            console.warn('Final submit toast nahi mila; DOM state verify kar rahe hain.');
+
+            if (!newToasts.length) {
+                return null;
+            }
+
+            const toast = newToasts[newToasts.length - 1];
+            const message = (
+                toast.innerText ||
+                toast.textContent ||
+                ''
+            ).trim();
+            const className = toast.className || '';
+
+            return {
+                message,
+                isSuccess: className.includes(
+                    'Toastify__toast--success'
+                ),
+                isError: className.includes(
+                    'Toastify__toast--error'
+                )
+            };
+        });
+
+        console.log(
+            'FINAL SUBMIT: New toast:',
+            finalToast
+        );
+
+        if (!finalToast) {
+            throw new Error(
+                'Final Submit Check-In response nahi mila.'
+            );
         }
 
-        if (toastIsError) {
-            throw new Error(`Final check-in failed: ${toastMessage}`);
+        if (finalToast.isError) {
+            throw new Error(
+                `Final Check-In failed: ${finalToast.message}`
+            );
         }
 
-        // If no success toast came, make sure validation errors are not present.
+        // Document upload ka stale toast kabhi final success nahi maana jayega.
+        if (/file uploaded successfully/i.test(finalToast.message)) {
+            throw new Error(
+                `Final Submit ke badle document upload toast mila: ${finalToast.message}`
+            );
+        }
+
+        if (!finalToast.isSuccess) {
+            throw new Error(
+                `Final Check-In success confirm nahi hua: ${finalToast.message}`
+            );
+        }
+
         const finalErrors = await page.evaluate(() => {
-            return Array.from(document.querySelectorAll('.Mui-error, .MuiFormHelperText-root.Mui-error'))
-                .map(e => (e.innerText || '').trim())
+            return Array.from(
+                document.querySelectorAll(
+                    '.Mui-error, .MuiFormHelperText-root.Mui-error'
+                )
+            )
+                .map((element) => {
+                    return (element.innerText || '').trim();
+                })
                 .filter(Boolean);
         });
+
         if (finalErrors.length > 0) {
-            throw new Error(`Final check-in validation failed: ${[...new Set(finalErrors)].join(' | ')}`);
+            throw new Error(
+                `Final check-in validation failed: ${[...new Set(finalErrors)].join(' | ')}`
+            );
         }
 
-        if (!toastMessage) toastMessage = 'Visitor check-in submitted; no error was reported by the page.';
+        // Person IDs sirf final Submit Check-In success confirm hone ke baad add honge.
+        for (const guest of guests) {
+            if (
+                guest.person_pk !== undefined &&
+                guest.person_pk !== null
+            ) {
+                updatedPersonIds.push(guest.person_pk);
+            }
+        }
 
-        tempFiles.forEach(f => { try { fs.unlinkSync(f); } catch (e) {} });
+        console.log(
+            'FINAL CHECK-IN SUCCESS. Updated person IDs:',
+            updatedPersonIds
+        );
+
+        tempFiles.forEach((file) => {
+            try {
+                fs.unlinkSync(file);
+            } catch (error) {}
+        });
+
         await context.close();
         context = null;
 
-        return { status: 'success', message: toastMessage, updated_person_ids: updatedPersonIds };
+        return {
+            status: 'success',
+            message: finalToast.message,
+            updated_person_ids: updatedPersonIds
+        };
     } catch (error) {
         tempFiles.forEach(f => { try { fs.unlinkSync(f); } catch (e) {} });
 
@@ -1322,48 +1385,90 @@ async function clickBodyButtonByText(page, buttonText, label = buttonText) {
 
 // -------------------------------------------------------------
 // POST /create-visitor ENTRYPOINT
+// DIRECT SAME-REQUEST RESPONSE - NO CALLBACK
 // -------------------------------------------------------------
 app.post('/create-visitor', async (req, res) => {
     try {
-        const { auth_storage, booking_data, callback_url } = req.body;
+        const { auth_storage, booking_data } = req.body;
+
+        if (!auth_storage) {
+            return res.status(400).json({
+                status: 'failed',
+                message: 'auth_storage required hai.'
+            });
+        }
 
         if (!booking_data) {
-            return res.status(400).json({ status: 'failed', message: 'booking_data required hai.' });
+            return res.status(400).json({
+                status: 'failed',
+                message: 'booking_data required hai.'
+            });
         }
 
-        if (!booking_data.guests || !Array.isArray(booking_data.guests) || booking_data.guests.length === 0) {
-            return res.status(400).json({ status: 'failed', message: 'booking_data.guests empty hai.' });
+        if (
+            !booking_data.guests ||
+            !Array.isArray(booking_data.guests) ||
+            booking_data.guests.length === 0
+        ) {
+            return res.status(400).json({
+                status: 'failed',
+                message: 'booking_data.guests empty hai.'
+            });
         }
 
-        console.log('Create visitor request received. Guests:', booking_data.guests.length);
+        console.log(
+            'Create visitor request received. Guests:',
+            booking_data.guests.length
+        );
 
-        // IMPORTANT FOR CLOUD RUN:
-        // Work ko HTTP response ke baad setImmediate/background me mat chalao.
-        // Request ko open rakho, automation complete karo, phir response/callback bhejo.
-        const result = await processCreateVisitor(auth_storage, booking_data);
+        console.log(
+            'CREATE VISITOR: Automation start. Same HTTP request final result tak wait karegi.'
+        );
 
-        if (callback_url) {
-            await sendCallback(callback_url, {
+        const result = await processCreateVisitor(
+            auth_storage,
+            booking_data
+        );
+
+        console.log(
+            'CREATE VISITOR: Automation finished:',
+            JSON.stringify({
                 status: result.status,
                 message: result.message || '',
-                updated_person_ids: result.updated_person_ids || [],
-                screenshot: result.screenshot || null,
-                error_screenshot: result.error_screenshot || null,
+                updated_person_ids: result.updated_person_ids || []
+            })
+        );
+
+        if (result.status !== 'success') {
+            console.log(
+                'CREATE VISITOR: Sending FAILED response on same request.'
+            );
+
+            return res.status(422).json({
+                ...result,
                 timestamp: new Date().toISOString()
             });
         }
 
-        const httpStatus = result.status === 'success' ? 200 : 422;
-        return res.status(httpStatus).json({
+        console.log(
+            'CREATE VISITOR: Sending SUCCESS response on same request.'
+        );
+
+        return res.status(200).json({
             ...result,
-            callback_enabled: !!callback_url,
             timestamp: new Date().toISOString()
         });
     } catch (error) {
-        console.error('Create visitor request error:', error.message);
+        console.error(
+            'CREATE VISITOR ROUTE ERROR:',
+            error.message
+        );
+        console.error(error.stack);
+
         return res.status(500).json({
             status: 'failed',
-            message: error.message || 'Visitor automation failed.'
+            message: error.message || 'Visitor automation failed.',
+            timestamp: new Date().toISOString()
         });
     }
 });
