@@ -1168,7 +1168,7 @@ async function processCreateVisitor(auth_storage, booking_data) {
         console.log('Submitting Final Check-In...');
         await clickButtonSmart({
             texts: [/submit check-?in/i, /^submit$/i],
-            fallbackIndex: 6,
+            fallbackIndex: 9,
             label: 'Submit Check-In'
         });
 
