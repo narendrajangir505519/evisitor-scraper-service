@@ -635,7 +635,7 @@ async function processCreateVisitor(auth_storage, booking_data) {
                 const indexResult = await page.evaluate((idx) => {
                     const buttons = Array.from(document.querySelectorAll('button'));
                     const btn = buttons[idx];
-                    console.log(buttons);
+                    console.log(btn);
         
                     if (!btn) {
                         return {
@@ -1167,11 +1167,80 @@ async function processCreateVisitor(auth_storage, booking_data) {
 
         // 3. FINAL SUBMIT CHECK-IN
         console.log('Submitting Final Check-In...');
-        await clickButtonSmart({
-            texts: [/submit check-?in/i, /^submit$/i],
-            fallbackIndex: 9,
-            label: 'Submit Check-In'
-        });
+        const clickSubmitCheckInDirect = async () => {
+            try {
+                const directResult = await page.evaluate(() => {
+                    // BODY / DOCUMENT ke saare <button>
+                    const buttons = Array.from(document.querySelectorAll('button'));
+                    // Debug ke liye sabhi button text
+                    const allButtons = buttons.map((btn, index) => ({
+                        index: index,
+                        text: (btn.textContent || '').trim(),
+                        disabled: !!btn.disabled
+                    }));
+        
+                    // Direct index 9
+                    const btn = buttons[9];
+                    if (!btn) {
+                        throw new Error(`Button index 9 nahi mila. Total buttons: ${buttons.length}`);
+                    }
+                    const buttonText =
+                        (btn.textContent || '').trim();
+                    const rect = btn.getBoundingClientRect();
+                    const visible =
+                        rect.width > 0 &&
+                        rect.height > 0;
+                    if (!visible) {
+                        throw new Error(`Button index 9 mila lekin visible nahi hai. Text: "${buttonText}"`);
+                    }
+                    if (btn.disabled) {
+                        throw new Error(`Button index 9 disabled hai. Text: "${buttonText}"`);
+                    }
+                    btn.scrollIntoView({
+                        behavior: 'instant',
+                        block: 'center'
+                    });
+
+                    // DIRECT CLICK
+                    btn.click();
+                    return {
+                        clicked: true,
+                        buttonText: buttonText,
+                        totalButtons: buttons.length,
+                        allButtons: allButtons
+                    };
+                });
+        
+        
+                // CLOUD RUN LOGS ME YE DIKHEGA
+                console.log(`DIRECT SUBMIT: index 9 par button mila: "${directResult.buttonText}"`);
+        
+                console.log(`DIRECT SUBMIT: Total buttons = ${directResult.totalButtons}`);
+        
+                console.log('DIRECT SUBMIT: All buttons:', directResult.allButtons);
+        
+                console.log('DIRECT SUBMIT: button[9] successfully clicked.');
+        
+                return true;
+        
+            } catch (directError) {
+                console.error('DIRECT SUBMIT FAILED:', directError.message);
+                console.log('Direct button[9] click fail hua. Ab clickButtonSmart fallback chala rahe hain...');
+        
+                // FALLBACK
+                await clickButtonSmart({
+                    texts: [/submit check-?in/i, /^submit$/i],
+                    fallbackIndex: 9,
+                    label: 'Submit Check-In'
+                });
+        
+                console.log('Submit Check-In: clickButtonSmart fallback successful.');
+                return true;
+            }
+        };
+        
+        
+        await clickSubmitCheckInDirect();
 
         let toastMessage = '';
         let toastIsError = false;
