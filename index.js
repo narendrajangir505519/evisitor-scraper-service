@@ -623,37 +623,119 @@ async function processCreateVisitor(auth_storage, booking_data) {
             }, { sel: selector, val: String(value) });
         };
 
-        const selectMuiDropdown = async (dropdownId, targetText) => {
-            if (!targetText) return;
+        const selectMuiDropdown = async (dropdownId, targetText, fallbackToSecondOption = false) => {
+            if (!targetText && !fallbackToSecondOption) return;
+
             const dropdown = page.locator(`#${dropdownId}`);
             await dropdown.waitFor({ state: 'visible', timeout: 7000 });
             await dropdown.click();
             await page.waitForTimeout(300);
 
             await page.waitForSelector('li[role="option"]', { state: 'visible', timeout: 7000 });
-            const optionClicked = await page.evaluate((textToMatch) => {
-                const norm = v => String(v || '').replace(/\u200B/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
-                const need = norm(textToMatch);
-                const options = Array.from(document.querySelectorAll('li[role="option"]'));
-                
-                let found = options.find(o => norm(o.innerText) === need);
-                if (!found) {
-                    found = options.find(o => norm(o.innerText).includes(need));
-                }
 
-                if (found) {
-                    found.scrollIntoView({ behavior: 'instant', block: 'center' });
+            const result = await page.evaluate(
+                ({ textToMatch, fallbackToSecondOption }) => {
+                    const norm = value => String(value || '')
+                        .replace(/\u200B/g, '')
+                        .replace(/\s+/g, ' ')
+                        .trim()
+                        .toLowerCase();
+
+                    const need = norm(textToMatch);
+                    const options = Array.from(
+                        document.querySelectorAll('li[role="option"]')
+                    );
+
+                    let found = null;
+                    let usedFallback = false;
+
+                    if (need) {
+                        found = options.find(option => {
+                            return norm(option.innerText) === need;
+                        });
+
+                        if (!found) {
+                            found = options.find(option => {
+                                return norm(option.innerText).includes(need);
+                            });
+                        }
+                    }
+
+                    // District text list me nahi mila to second option select karo.
+                    if (!found && fallbackToSecondOption && options.length > 1) {
+                        found = options[1];
+                        usedFallback = true;
+                    }
+
+                    if (!found) {
+                        return {
+                            clicked: false,
+                            optionCount: options.length,
+                            selectedText: '',
+                            usedFallback: false
+                        };
+                    }
+
+                    const ariaDisabled = found.getAttribute('aria-disabled') === 'true';
+                    const classDisabled = found.classList.contains('Mui-disabled');
+
+                    if (ariaDisabled || classDisabled) {
+                        return {
+                            clicked: false,
+                            optionCount: options.length,
+                            selectedText: norm(found.innerText),
+                            usedFallback
+                        };
+                    }
+
+                    const selectedText = String(found.innerText || '')
+                        .replace(/\s+/g, ' ')
+                        .trim();
+
+                    found.scrollIntoView({
+                        behavior: 'instant',
+                        block: 'center'
+                    });
+
                     found.click();
-                    return true;
-                }
-                return false;
-            }, targetText);
 
-            if (!optionClicked) {
+                    return {
+                        clicked: true,
+                        optionCount: options.length,
+                        selectedText,
+                        usedFallback
+                    };
+                },
+                {
+                    textToMatch: targetText || '',
+                    fallbackToSecondOption
+                }
+            );
+
+            if (!result.clicked) {
                 await page.keyboard.press('Escape');
-                console.warn(`Dropdown option "${targetText}" not found for #${dropdownId}`);
+
+                console.warn(
+                    `Dropdown option "${targetText || ''}" not found for #${dropdownId}. ` +
+                    `Total options: ${result.optionCount}`
+                );
+
+                return false;
             }
+
+            if (result.usedFallback) {
+                console.log(
+                    `DISTRICT FALLBACK: "${targetText || ''}" nahi mila. ` +
+                    `Second option select kiya: "${result.selectedText}"`
+                );
+            } else {
+                console.log(
+                    `Dropdown selected: "${result.selectedText}" for #${dropdownId}`
+                );
+            }
+
             await page.waitForTimeout(300);
+            return true;
         };
 
         // 1. FILL ROOM / BASE DETAILS
@@ -721,10 +803,15 @@ async function processCreateVisitor(auth_storage, booking_data) {
                 await page.waitForTimeout(500);
             }
 
-            if (guest.district || guest.districtcd) {
-                await selectMuiDropdown('mui-component-select-districtcd', guest.district || guest.districtcd);
-                await page.waitForTimeout(300);
-            }
+            const districtValue = guest.district || guest.districtcd || '';
+
+            await selectMuiDropdown(
+                'mui-component-select-districtcd',
+                districtValue,
+                true
+            );
+
+            await page.waitForTimeout(300);
 
             if (guest.pscode || guest.police_station) {
                 await selectMuiDropdown('mui-component-select-pscode', guest.pscode || guest.police_station);
