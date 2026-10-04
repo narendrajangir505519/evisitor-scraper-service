@@ -618,6 +618,8 @@ async function processCreateVisitor(auth_storage, booking_data) {
         await page.waitForSelector('body', { timeout: 15000 });
         await page.waitForTimeout(1000);
 
+        await removeUpdateAvailableModal(page);
+
         // Fail fast if restored auth is invalid/expired and portal redirects to login.
         const loginVisible = await page.locator('input[placeholder="Enter SSO ID"]').isVisible({ timeout: 1500 }).catch(() => false);
         if (loginVisible || /login/i.test(page.url())) {
@@ -1281,6 +1283,146 @@ try {
     }
 }
 
+
+// -------------------------------------------------------------
+// Update now modal check and remove from body.
+// -------------------------------------------------------------
+async function removeUpdateAvailableModal(page) {
+    try {
+        const result = await page.evaluate(() => {
+            const dialogs = Array.from(
+                document.querySelectorAll('div[role="dialog"]')
+            );
+
+            const updateDialog = dialogs.find(dialog => {
+                const text = (dialog.textContent || '').trim();
+
+                return (
+                    text.includes('Update Available') &&
+                    text.includes('Update Now')
+                );
+            });
+
+            if (!updateDialog) {
+                return {
+                    found: false,
+                    removed: false
+                };
+            }
+
+            const allButtons = Array.from(
+                document.querySelectorAll('button')
+            );
+
+            const updateButtonIndex = allButtons.findIndex(button => {
+                return (button.textContent || '').trim() === 'Update Now';
+            });
+
+            const updateButtonText =
+                updateButtonIndex >= 0
+                    ? (allButtons[updateButtonIndex].textContent || '').trim()
+                    : '';
+
+            const modalRoot = updateDialog.closest(
+                '.MuiDialog-root, .MuiModal-root'
+            );
+
+            if (modalRoot) {
+                modalRoot.remove();
+            } else {
+                updateDialog.remove();
+            }
+
+            /*
+             * Update modal remove hone ke baad check karo
+             * koi aur VISIBLE MUI modal to open nahi hai.
+             */
+            const visibleModalExists = Array.from(
+                document.querySelectorAll('.MuiModal-root')
+            ).some(modal => {
+                if (modal.classList.contains('MuiModal-hidden')) {
+                    return false;
+                }
+
+                const style = window.getComputedStyle(modal);
+                const rect = modal.getBoundingClientRect();
+
+                return (
+                    style.display !== 'none' &&
+                    style.visibility !== 'hidden' &&
+                    rect.width > 0 &&
+                    rect.height > 0
+                );
+            });
+
+            /*
+             * Agar koi aur visible modal nahi hai
+             * to MUI ke body/root locks hata do.
+             */
+            if (!visibleModalExists) {
+                document.body.style.removeProperty('overflow');
+                document.body.style.removeProperty('padding-right');
+
+                const root = document.getElementById('root');
+
+                if (root) {
+                    root.removeAttribute('aria-hidden');
+                }
+            }
+
+            const buttonsAfterRemoval = Array.from(
+                document.querySelectorAll('button')
+            ).map((button, index) => ({
+                index,
+                text: (button.textContent || '').trim(),
+                disabled: !!button.disabled
+            }));
+
+            return {
+                found: true,
+                removed: true,
+                updateButtonIndex,
+                updateButtonText,
+                totalButtonsAfterRemoval: buttonsAfterRemoval.length,
+                buttonsAfterRemoval
+            };
+        });
+
+        if (!result.found) {
+            console.log(
+                'UPDATE MODAL: Update Available modal nahi mila.'
+            );
+
+            return false;
+        }
+
+        console.log(
+            `UPDATE MODAL: Modal remove kar diya. ` +
+            `Update Now button index ${result.updateButtonIndex} par tha.`
+        );
+
+        console.log(
+            `UPDATE MODAL: Remove ke baad total buttons = ` +
+            `${result.totalButtonsAfterRemoval}`
+        );
+
+        console.log(
+            'UPDATE MODAL: Buttons after removal:',
+            result.buttonsAfterRemoval
+        );
+
+        return true;
+
+    } catch (error) {
+        console.error(
+            'UPDATE MODAL REMOVE ERROR:',
+            error.message
+        );
+
+        return false;
+    }
+}
+
 // -------------------------------------------------------------
 // POST /create-visitor ENTRYPOINT
 // -------------------------------------------------------------
@@ -1587,7 +1729,8 @@ async function processCheckoutVisitor(auth_storage, checkout_data) {
         | Session Expired Check
         |--------------------------------------------------------------------------
         */
-
+        await removeUpdateAvailableModal(page);
+        
         const sessionValid = await isEvisitorSessionValid(page);
 
         if (!sessionValid) {
