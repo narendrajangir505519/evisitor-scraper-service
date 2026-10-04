@@ -888,7 +888,7 @@ async function processCreateVisitor(auth_storage, booking_data) {
             }
 
             const isVoterIdDocument = (value) => {
-                return String(value || '').trim().toLowerCase() === 'voter id number';
+                return String(value || '').trim().toLowerCase() === 'Aadhaar Card';
             };
 
             const docNumber = guest.document_number || guest.documentNumber || guest.id_number || guest.doc_number;
