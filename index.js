@@ -635,6 +635,7 @@ async function processCreateVisitor(auth_storage, booking_data) {
                 const indexResult = await page.evaluate((idx) => {
                     const buttons = Array.from(document.querySelectorAll('button'));
                     const btn = buttons[idx];
+                    console.log(buttons);
         
                     if (!btn) {
                         return {
