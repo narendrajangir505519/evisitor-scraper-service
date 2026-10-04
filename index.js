@@ -626,130 +626,27 @@ async function processCreateVisitor(auth_storage, booking_data) {
             throw new Error('EVISITOR_SESSION_EXPIRED: auth_storage/cookies invalid ya expire ho chuke hain. Pehle /login-evisitor dobara call karein.');
         }
 
-        const clickButtonSmart = async ({ texts, fallbackIndex = null, label }) => {
-
-            // 1. FIRST PRIORITY: Button Index
-            if (fallbackIndex !== null) {
-                console.log(
-                    `${label}: pehle button index ${fallbackIndex} check kar rahe hain...`
-                );
-        
-                const indexResult = await page.evaluate((idx) => {
-                    const buttons = Array.from(document.querySelectorAll('button'));
-                    const btn = buttons[idx];
-                    console.log(btn);
-        
-                    if (!btn) {
-                        return {
-                            clicked: false,
-                            reason: 'button_not_found'
-                        };
-                    }
-        
-                    const rect = btn.getBoundingClientRect();
-        
-                    const isVisible =
-                        rect.width > 0 &&
-                        rect.height > 0;
-        
-                    if (!isVisible) {
-                        return {
-                            clicked: false,
-                            reason: 'button_not_visible'
-                        };
-                    }
-        
-                    if (btn.disabled) {
-                        return {
-                            clicked: false,
-                            reason: 'button_disabled'
-                        };
-                    }
-        
-                    btn.scrollIntoView({
-                        behavior: 'instant',
-                        block: 'center'
-                    });
-        
-                    btn.click();
-        
-                    return {
-                        clicked: true,
-                        text: (btn.textContent || '').trim()
-                    };
-        
-                }, fallbackIndex);
-        
-                if (indexResult.clicked) {
-                    console.log(
-                        `${label}: button index ${fallbackIndex} se click ho gaya. Button text: "${indexResult.text}"`
-                    );
-        
-                    return true;
-                }
-        
-                console.warn(
-                    `${label}: button index ${fallbackIndex} fail hua (${indexResult.reason}). Ab text selector try karenge.`
-                );
-            }
-        
-        
-            // 2. SECOND PRIORITY: Text Selector
-            for (const text of texts) {
-        
-                const btn = page
-                    .getByRole('button', {
-                        name: text,
-                        exact: false
-                    })
-                    .first();
-        
-                if (
-                    await btn
-                        .isVisible({ timeout: 1200 })
-                        .catch(() => false)
-                ) {
-        
-                    await btn.scrollIntoViewIfNeeded();
-        
-                    await btn.click();
-        
-                    console.log(
-                        `${label}: text selector se click ho gaya: ${text}`
-                    );
-        
-                    return true;
-                }
-            }
-        
-        
-            // 3. DONO FAIL
-            throw new Error(
-                `${label} button DOM me nahi mila. Index ${fallbackIndex} aur text selector dono fail.`
-            );
-        };
-
         // Check if Modal is already open
         let isModalOpen = await page.evaluate(() => !!document.querySelector('input[name="roomNumber"]'));
 
         if (!isModalOpen) {
             console.log('Modal band hai. Create Visitor button click kar rahe hain...');
             try {
-                await clickButtonSmart({
-                    texts: [/create visitor/i, /create check-?in/i, /^check-?in$/i],
-                    fallbackIndex: 2,
-                    label: 'Create Visitor'
-                });
+                await clickBodyButtonByText(
+                    page,
+                    'Create Visitor',
+                    'Create Visitor'
+                );
             } catch (buttonError) {
                 const visitorsMenu = page.getByText('Visitors', { exact: true }).first();
                 if (await visitorsMenu.isVisible({ timeout: 1500 }).catch(() => false)) {
                     await visitorsMenu.click();
                     await page.waitForTimeout(500);
-                    await clickButtonSmart({
-                        texts: [/create visitor/i, /create check-?in/i, /^check-?in$/i],
-                        fallbackIndex: 2,
-                        label: 'Create Visitor'
-                    });
+                    await clickBodyButtonByText(
+                        page,
+                        'Create Visitor',
+                        'Create Visitor'
+                    );
                 } else {
                     throw buttonError;
                 }
@@ -1142,13 +1039,13 @@ async function processCreateVisitor(auth_storage, booking_data) {
                 );
             }
 
-            // Add guest: text-based selector first; numeric index only compatibility fallback.
+            // Add guest: current body ke buttons me exact text match karke click.
             console.log(`Clicking 'Add' for Guest ${i + 1}...`);
-            await clickButtonSmart({
-                texts: [/^add$/i, /add guest/i, /add visitor/i],
-                fallbackIndex: 4,
-                label: `Guest ${i + 1} Add`
-            });
+            await clickBodyButtonByText(
+                page,
+                'Add',
+                `Guest ${i + 1} Add`
+            );
 
             await page.waitForTimeout(1000);
             const errors = await page.evaluate(() => {
@@ -1168,55 +1065,12 @@ async function processCreateVisitor(auth_storage, booking_data) {
         }
 
         // 3. FINAL SUBMIT CHECK-IN
-console.log('Submitting Final Check-In...');
-
-try {
-    const result = await page.evaluate(() => {
-        const buttons = Array.from(document.querySelectorAll('button'));
-
-        console.log('Total Buttons:', buttons.length);
-
-        const btn = buttons[9];
-
-        if (!btn) {
-            throw new Error(`button[9] nahi mila. Total buttons: ${buttons.length}`);
-        }
-
-        const text = (btn.textContent || '').trim();
-
-        if (!/submit check-?in/i.test(text)) {
-            console.log(`button[9] mila lekin text "${text}" hai`);
-        }
-
-        btn.scrollIntoView({
-            block: 'center',
-            behavior: 'instant'
-        });
-
-        btn.click();
-
-        return {
-            text,
-            totalButtons: buttons.length
-        };
-    });
-
-    console.log(
-        `DIRECT SUBMIT SUCCESS: button[9] = "${result.text}", Total buttons = ${result.totalButtons}`
-    );
-} catch (directError) {
-    console.error('DIRECT SUBMIT FAILED:', directError.message);
-    console.log('Ab clickButtonSmart fallback try kar rahe hain...');
-
-    await clickButtonSmart({
-        texts: [
-            /submit check-?in/i,
-            /^submit$/i
-        ],
-        fallbackIndex: 9,
-        label: 'Submit Check-In'
-    });
-}
+        console.log('Submitting Final Check-In...');
+        await clickBodyButtonByText(
+            page,
+            'Submit Check-In',
+            'Submit Check-In'
+        );
 
         let toastMessage = '';
         let toastIsError = false;
@@ -1285,142 +1139,185 @@ try {
 
 
 // -------------------------------------------------------------
-// Update now modal check and remove from body.
+// UPDATE AVAILABLE MODAL
 // -------------------------------------------------------------
 async function removeUpdateAvailableModal(page) {
     try {
-        const result = await page.evaluate(() => {
-            const dialogs = Array.from(
-                document.querySelectorAll('div[role="dialog"]')
-            );
+        const updateDialog = page
+            .locator('div[role="dialog"]')
+            .filter({ hasText: 'Update Available' })
+            .first();
 
-            const updateDialog = dialogs.find(dialog => {
-                const text = (dialog.textContent || '').trim();
+        const modalFound = await updateDialog
+            .waitFor({
+                state: 'visible',
+                timeout: 2500
+            })
+            .then(() => true)
+            .catch(() => false);
 
-                return (
-                    text.includes('Update Available') &&
-                    text.includes('Update Now')
-                );
-            });
-
-            if (!updateDialog) {
-                return {
-                    found: false,
-                    removed: false
-                };
-            }
-
-            const allButtons = Array.from(
-                document.querySelectorAll('button')
-            );
-
-            const updateButtonIndex = allButtons.findIndex(button => {
-                return (button.textContent || '').trim() === 'Update Now';
-            });
-
-            const updateButtonText =
-                updateButtonIndex >= 0
-                    ? (allButtons[updateButtonIndex].textContent || '').trim()
-                    : '';
-
-            const modalRoot = updateDialog.closest(
-                '.MuiDialog-root, .MuiModal-root'
-            );
-
-            if (modalRoot) {
-                modalRoot.remove();
-            } else {
-                updateDialog.remove();
-            }
-
-            /*
-             * Update modal remove hone ke baad check karo
-             * koi aur VISIBLE MUI modal to open nahi hai.
-             */
-            const visibleModalExists = Array.from(
-                document.querySelectorAll('.MuiModal-root')
-            ).some(modal => {
-                if (modal.classList.contains('MuiModal-hidden')) {
-                    return false;
-                }
-
-                const style = window.getComputedStyle(modal);
-                const rect = modal.getBoundingClientRect();
-
-                return (
-                    style.display !== 'none' &&
-                    style.visibility !== 'hidden' &&
-                    rect.width > 0 &&
-                    rect.height > 0
-                );
-            });
-
-            /*
-             * Agar koi aur visible modal nahi hai
-             * to MUI ke body/root locks hata do.
-             */
-            if (!visibleModalExists) {
-                document.body.style.removeProperty('overflow');
-                document.body.style.removeProperty('padding-right');
-
-                const root = document.getElementById('root');
-
-                if (root) {
-                    root.removeAttribute('aria-hidden');
-                }
-            }
-
-            const buttonsAfterRemoval = Array.from(
-                document.querySelectorAll('button')
-            ).map((button, index) => ({
-                index,
-                text: (button.textContent || '').trim(),
-                disabled: !!button.disabled
-            }));
-
-            return {
-                found: true,
-                removed: true,
-                updateButtonIndex,
-                updateButtonText,
-                totalButtonsAfterRemoval: buttonsAfterRemoval.length,
-                buttonsAfterRemoval
-            };
-        });
-
-        if (!result.found) {
-            console.log(
-                'UPDATE MODAL: Update Available modal nahi mila.'
-            );
-
+        if (!modalFound) {
+            console.log('UPDATE MODAL: Update Available modal nahi mila.');
             return false;
         }
 
-        console.log(
-            `UPDATE MODAL: Modal remove kar diya. ` +
-            `Update Now button index ${result.updateButtonIndex} par tha.`
-        );
+        console.log('UPDATE MODAL: Update Available modal mila.');
 
-        console.log(
-            `UPDATE MODAL: Remove ke baad total buttons = ` +
-            `${result.totalButtonsAfterRemoval}`
-        );
+        const updateButton = updateDialog.getByRole('button', {
+            name: 'Update Now',
+            exact: true
+        });
 
-        console.log(
-            'UPDATE MODAL: Buttons after removal:',
-            result.buttonsAfterRemoval
-        );
+        await updateButton.waitFor({
+            state: 'visible',
+            timeout: 5000
+        });
+
+        console.log('UPDATE MODAL: Update Now button mila.');
+        console.log('UPDATE MODAL: Update Now click kar rahe hain...');
+
+        const reloadPromise = page.waitForNavigation({
+            waitUntil: 'domcontentloaded',
+            timeout: 20000
+        });
+
+        await updateButton.click();
+
+        console.log('UPDATE MODAL: Update Now clicked. Reload ka wait...');
+
+        await reloadPromise;
+
+        await page.waitForSelector('body', {
+            state: 'attached',
+            timeout: 15000
+        });
+
+        await page.waitForTimeout(500);
+
+        console.log('UPDATE MODAL: Page reload successfully complete.');
 
         return true;
-
     } catch (error) {
         console.error(
-            'UPDATE MODAL REMOVE ERROR:',
+            'UPDATE MODAL ERROR:',
             error.message
         );
 
-        return false;
+        throw error;
     }
+}
+
+// -------------------------------------------------------------
+// CLICK BUTTON BY EXACT TEXT FROM CURRENT BODY
+// -------------------------------------------------------------
+async function clickBodyButtonByText(page, buttonText, label = buttonText) {
+    const result = await page.evaluate((expectedText) => {
+        const normalizeText = (value) => {
+            return String(value || '')
+                .replace(/\s+/g, ' ')
+                .trim()
+                .toLowerCase();
+        };
+
+        // Har call par current DOM ke saare buttons fresh array me lenge.
+        const buttons = Array.from(
+            document.querySelectorAll('button')
+        );
+
+        const expected = normalizeText(expectedText);
+
+        const allButtons = buttons.map((button, index) => {
+            const rect = button.getBoundingClientRect();
+
+            return {
+                index,
+                text: (button.textContent || '')
+                    .replace(/\s+/g, ' ')
+                    .trim(),
+                disabled: !!button.disabled,
+                visible:
+                    rect.width > 0 &&
+                    rect.height > 0
+            };
+        });
+
+        const matchedButton = buttons.find((button) => {
+            const rect = button.getBoundingClientRect();
+
+            const visible =
+                rect.width > 0 &&
+                rect.height > 0;
+
+            const currentText = normalizeText(
+                button.textContent
+            );
+
+            return (
+                currentText === expected &&
+                visible &&
+                !button.disabled
+            );
+        });
+
+        if (!matchedButton) {
+            return {
+                clicked: false,
+                totalButtons: buttons.length,
+                allButtons
+            };
+        }
+
+        const matchedText = (matchedButton.textContent || '')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        const matchedIndex = buttons.indexOf(matchedButton);
+
+        matchedButton.scrollIntoView({
+            behavior: 'instant',
+            block: 'center'
+        });
+
+        matchedButton.click();
+
+        return {
+            clicked: true,
+            matchedText,
+            matchedIndex,
+            totalButtons: buttons.length,
+            allButtons
+        };
+    }, buttonText);
+
+    console.log(
+        `${label}: current body me total ${result.totalButtons} buttons mile.`
+    );
+
+    if (!result.clicked) {
+        console.error(
+            `${label}: "${buttonText}" text wala button nahi mila.`
+        );
+
+        console.error(
+            `${label}: Current buttons:`,
+            result.allButtons
+        );
+
+        throw new Error(
+            `${label}: "${buttonText}" button current DOM me nahi mila.`
+        );
+    }
+
+    console.log(
+        `${label}: text match hua = "${result.matchedText}" ` +
+        `(current index ${result.matchedIndex})`
+    );
+
+    console.log(
+        `${label}: button text ke according successfully click ho gaya.`
+    );
+
+    return true;
 }
 
 // -------------------------------------------------------------
