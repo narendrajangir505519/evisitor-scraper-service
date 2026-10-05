@@ -824,7 +824,7 @@ async function processCreateVisitor(auth_storage, booking_data) {
             }
 
             const isVoterIdDocument = (value) => {
-                return String(value || '').trim().toLowerCase() === 'aadhaar card';
+                return String(value || '').trim().toLowerCase() != 'aadhaar card';
             };
 
             const docNumber = guest.document_number || guest.documentNumber || guest.id_number || guest.doc_number;
