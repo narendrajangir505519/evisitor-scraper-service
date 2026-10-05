@@ -752,21 +752,9 @@ async function processCreateVisitor(auth_storage, booking_data) {
             await fillReactInput('input[name="checkInDateTime"]', formattedCheckIn);
         }
 
-        // if (booking_data.coming_from) {
-        //     await fillReactInput('input[name="comingLocation"]', booking_data.coming_from);
-        // }
-
-        // if (booking_data.going_to) {
-        //     await fillReactInput('input[name="goingLocation"]', booking_data.going_to);
-        // }
-
         if (booking_data.visit_reason || booking_data.visit_reason_type) {
             await selectMuiDropdown('mui-component-select-visitReasonType', booking_data.visit_reason || booking_data.visit_reason_type);
         }
-
-        // if (booking_data.note) {
-        //     await fillReactInput('textarea[name="note"]', booking_data.note);
-        // }
 
         // 2. FILL GUEST(S) DETAILS
         const guests = booking_data.guests || [];
@@ -781,10 +769,6 @@ async function processCreateVisitor(auth_storage, booking_data) {
             if (guest.dateOfBirth || guest.dob) {
                 await fillReactInput('input[name="dateOfBirth"]', guest.dateOfBirth || guest.dob);
             }
-
-            // if (guest.email) {
-            //     await fillReactInput('input[name="email"]', guest.email);
-            // }
 
             if (guest.gender) {
                 let gText = 'Male';
@@ -812,10 +796,6 @@ async function processCreateVisitor(auth_storage, booking_data) {
             );
 
             await page.waitForTimeout(300);
-
-            // if (guest.pscode || guest.police_station) {
-            //     await selectMuiDropdown('mui-component-select-pscode', guest.pscode || guest.police_station);
-            // }
 
             const docType = guest.documentType || guest.id_type || '';
             if (docType) {
