@@ -817,7 +817,7 @@ async function processCreateVisitor(auth_storage, booking_data) {
             //     await selectMuiDropdown('mui-component-select-pscode', guest.pscode || guest.police_station);
             // }
 
-            const docType = guest.document_type || guest.documentType || guest.id_type || '';
+            const docType = guest.documentType || guest.id_type || '';
             if (docType) {
                 await selectMuiDropdown('mui-component-select-documentType', docType);
                 await page.waitForTimeout(500);
@@ -827,7 +827,7 @@ async function processCreateVisitor(auth_storage, booking_data) {
                 return String(value || '').trim().toLowerCase() !== 'aadhaar card';
             };
 
-            const docNumber = guest.document_number || guest.documentNumber || guest.id_number || guest.doc_number;
+            const docNumber = guest.documentNumber || guest.id_number || guest.doc_number;
             if (isNotAadhaarIdDocument(docType)) {
                 if (docNumber) {
                     await fillReactInput('input[name="documentNumber"]', docNumber);
