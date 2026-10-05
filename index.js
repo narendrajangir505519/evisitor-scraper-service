@@ -823,12 +823,12 @@ async function processCreateVisitor(auth_storage, booking_data) {
                 await page.waitForTimeout(500);
             }
 
-            const isVoterIdDocument = (value) => {
-                return String(value || '').trim().toLowerCase() != 'aadhaar card';
+            const isNotAadhaarIdDocument = (value) => {
+                return String(value || '').trim().toLowerCase() !== 'aadhaar card';
             };
 
             const docNumber = guest.document_number || guest.documentNumber || guest.id_number || guest.doc_number;
-            if (isVoterIdDocument(docType)) {
+            if (isNotAadhaarIdDocument(docType)) {
                 if (docNumber) {
                     await fillReactInput('input[name="documentNumber"]', docNumber);
                 }
