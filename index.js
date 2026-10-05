@@ -752,8 +752,20 @@ async function processCreateVisitor(auth_storage, booking_data) {
             await fillReactInput('input[name="checkInDateTime"]', formattedCheckIn);
         }
 
+        if (booking_data.coming_from) {
+            await fillReactInput('input[name="comingLocation"]', booking_data.coming_from);
+        }
+
+        if (booking_data.going_to) {
+            await fillReactInput('input[name="goingLocation"]', booking_data.going_to);
+        }
+
         if (booking_data.visit_reason || booking_data.visit_reason_type) {
             await selectMuiDropdown('mui-component-select-visitReasonType', booking_data.visit_reason || booking_data.visit_reason_type);
+        }
+
+        if (booking_data.note) {
+            await fillReactInput('textarea[name="note"]', booking_data.note);
         }
 
         // 2. FILL GUEST(S) DETAILS
@@ -768,6 +780,10 @@ async function processCreateVisitor(auth_storage, booking_data) {
 
             if (guest.dateOfBirth || guest.dob) {
                 await fillReactInput('input[name="dateOfBirth"]', guest.dateOfBirth || guest.dob);
+            }
+
+            if (guest.email) {
+                await fillReactInput('input[name="email"]', guest.email);
             }
 
             if (guest.gender) {
@@ -797,18 +813,22 @@ async function processCreateVisitor(auth_storage, booking_data) {
 
             await page.waitForTimeout(300);
 
-            const docType = guest.documentType || guest.id_type || '';
+            if (guest.pscode || guest.police_station) {
+                await selectMuiDropdown('mui-component-select-pscode', guest.pscode || guest.police_station);
+            }
+
+            const docType = guest.document_type || guest.documentType || guest.id_type || '';
             if (docType) {
                 await selectMuiDropdown('mui-component-select-documentType', docType);
                 await page.waitForTimeout(500);
             }
 
-            const isNotAadhaarIdDocument = (value) => {
-                return String(value || '').trim().toLowerCase() !== 'aadhaar card';
+            const isVoterIdDocument = (value) => {
+                return String(value || '').trim().toLowerCase() === 'aadhaar card';
             };
 
-            const docNumber = guest.documentNumber || guest.id_number || guest.doc_number;
-            if (isNotAadhaarIdDocument(docType)) {
+            const docNumber = guest.document_number || guest.documentNumber || guest.id_number || guest.doc_number;
+            if (isVoterIdDocument(docType)) {
                 if (docNumber) {
                     await fillReactInput('input[name="documentNumber"]', docNumber);
                 }
