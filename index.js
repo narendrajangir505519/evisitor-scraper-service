@@ -590,7 +590,7 @@ async function processCreateVisitor(auth_storage, booking_data) {
                 const visitorsMenu = page.getByText('Visitors', { exact: true }).first();
                 if (await visitorsMenu.isVisible({ timeout: 1500 }).catch(() => false)) {
                     await visitorsMenu.click();
-                    await page.waitForTimeout(500);
+                    await page.waitForTimeout(2000);
                     await clickBodyButtonByText(
                         page,
                         'Create Visitor',
